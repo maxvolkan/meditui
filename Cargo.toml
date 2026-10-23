@@ -2,7 +2,7 @@
 name = "meditui"
 version = "0.1.0"
 edition = "2024"
-description = "Guided meditation and breathing in your terminal"
+description = "guided meditation tui"
 license = "MIT"
 repository = "https://github.com/maxvolkan/meditui"
 readme = "README.md"

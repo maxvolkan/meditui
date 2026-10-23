@@ -4,17 +4,17 @@
 
 # meditui
 
-Guided meditation and breathing in your terminal. I wanted to get some
-meditation in between coding sessions without switching apps, so I made
-this.
+This is a guided meditation terminal UI (tui) app. I hope it can help with focus, developing a healthy work life balance, or maybe just to learn meditations.
+
+Disclaimer: I am not an expert in meditation and simply practice in my free time. I am aware that different teachers teach meditation practices in different ways, however let me know if there is anything that should be adjusted.
 
 ![meditui: the Start here folder, a first-time walkthrough of Nadi Shuddhi, and the dim eyes-closed view](assets/demo.gif)
 
 - Breathing exercises and guided meditations, sorted into folders by
   what they're for, with a Start here folder for the basics
-- A walkthrough the first time you do a meditation: a few short steps,
+- A walkthrough the first time you do a meditation with a few short steps,
   then slow breaths with the circle that ease into the real pace
-- A breathing circle to follow, with soft tones when the breath turns
+- A breathing circle to follow, with soft sounds when the breath turns
 - A pomodoro timer whose breaks can be a short meditation
 - Stats and a year-long practice heatmap
 - Your own meditations, written as small TOML files ([recipes](#recipes))
@@ -73,7 +73,7 @@ In the library:
 | `?` | replay the tour |
 | `q` | quit |
 
-New to meditation? Open the Start here folder and begin with Nadi Shuddhi.
+If you are new to mediation, you can open the "Start here" folder and begin with Nadi Shuddhi (Alternate Nostril Breathing).
 Selecting a folder lists when to use each meditation in it.
 
 After choosing a meditation, `←` `→` change the length by a minute and
@@ -221,7 +221,7 @@ Nothing is sent anywhere.
 
 ## A note on safety
 
-meditui isn't medical advice. Some of the breathing practices (fast
+Do not take meditui as medical advice. Some of the breathing practices (fast
 breathing like Kapalbhati and Bhastrika, and long breath holds) aren't a
 good idea if you're pregnant or have high blood pressure, heart problems,
 epilepsy or a history of panic attacks. Each one's description lists its
@@ -247,11 +247,11 @@ The GIFs in this README are recorded with [vhs](https://github.com/charmbracelet
 `vhs assets/demo.tape` and `vhs assets/banner.tape`. Each file says what to
 build first.
 
-I built meditui with a lot of help from Claude Code.
+I built meditui with help from Claude Code.
 
 ## Support
 
-If meditui helps you, you can [buy me a coffee on Ko-fi](https://ko-fi.com/max_reformed).
+I am just a student so if meditui helps you, you can [buy me a coffee on Ko-fi](https://ko-fi.com/max_reformed).
 
 ## License
 
