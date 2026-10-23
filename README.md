@@ -10,10 +10,10 @@ this.
 
 ![meditui: the Start here folder, a first-time walkthrough of Nadi Shuddhi, and the dim eyes-closed view](assets/demo.gif)
 
-- A library of breathing exercises and guided practices in folders by
+- Breathing exercises and guided meditations, sorted into folders by
   what they're for, with a Start here folder for the basics
-- A walkthrough the first time you try one: a few short steps, then slow
-  breaths with the circle that ease into the real pace
+- A walkthrough the first time you do a meditation: a few short steps,
+  then slow breaths with the circle that ease into the real pace
 - A breathing circle to follow, with soft tones when the breath turns
 - A pomodoro timer whose breaks can be a short meditation
 - Stats and a year-long practice heatmap
@@ -64,9 +64,9 @@ In the library:
 | `←` `→` | close or open a folder |
 | `Tab` | jump to the next folder |
 | `Enter` | choose a meditation |
-| `i` | replay the walkthrough for the selected one |
-| `a` / `d` | add / delete one of your own |
-| `o` | show only office-safe ones |
+| `i` | replay the walkthrough for the selected meditation |
+| `a` / `d` | add / delete your own meditation |
+| `o` | show only office-safe meditations |
 | `p` | pomodoro |
 | `t` | stats |
 | `s` | settings |
@@ -80,7 +80,7 @@ After choosing a meditation, `←` `→` change the length by a minute and
 `↑` `↓` by five, and `Enter` goes on. A short checklist helps you settle
 in; skip it with `s`, or turn it off in settings.
 
-The first time you try a meditation, a walkthrough shows you how, one short
+The first time you do a meditation, a walkthrough shows you how, one short
 step at a time. For a breathing pattern, the circle then starts with long,
 slow breaths and speeds up to the real pace, and the session carries on
 from there. `s` skips it, and `i` in the library replays it.
@@ -247,8 +247,7 @@ The GIFs in this README are recorded with [vhs](https://github.com/charmbracelet
 `vhs assets/demo.tape` and `vhs assets/banner.tape`. Each file says what to
 build first.
 
-I built meditui with a lot of help from Claude Code, an AI coding
-assistant.
+I built meditui with a lot of help from Claude Code.
 
 ## Support
 
