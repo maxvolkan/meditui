@@ -2,6 +2,13 @@
 name = "meditui"
 version = "0.1.0"
 edition = "2024"
+description = "Guided meditation and breathing in your terminal"
+license = "MIT"
+repository = "https://github.com/maxvolkan/meditui"
+readme = "README.md"
+keywords = ["meditation", "breathing", "tui", "terminal", "pomodoro"]
+categories = ["command-line-utilities"]
+exclude = ["assets/"]
 
 [dependencies]
 ratatui = { version = "0.30.0", features = ["all-widgets"]}
