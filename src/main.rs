@@ -82,7 +82,6 @@ fn main() -> Result<()> {
     let sound = sound::Sound::open();
     let mut app = App::new(storage::load(), storage::data_path(), sound, recipes);
     app.desktop_alerts = true;
-    // `medi pomo [25/5]` goes straight into a pomodoro (the tour can wait).
     if let Some(lengths) = pomodoro {
         if let Some((work, rest)) = lengths {
             app.data.pomodoro.work = work;
@@ -107,10 +106,9 @@ fn main() -> Result<()> {
 
 fn run(mut terminal: DefaultTerminal, app: &mut App) -> Result<()> {
     while !app.quit {
-        //Rendering
         terminal.draw(|f| ui::render(f, app))?;
 
-        //Input handling (only when a key is waiting, so the timer keeps moving)
+        // Only read a key if one is waiting, so the timer keeps moving.
         if event::poll(TICK_RATE)?
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
@@ -118,7 +116,7 @@ fn run(mut terminal: DefaultTerminal, app: &mut App) -> Result<()> {
             app.handle_key(key);
         }
 
-        //Time passing (finishes sessions even when no key is pressed)
+        // Sessions still finish when no key is pressed.
         app.tick();
     }
     Ok(())

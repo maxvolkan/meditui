@@ -25,6 +25,13 @@ pub struct Meditation {
     pub interval_bell: Option<u64>,
     /// A practice that usually comes after another one.
     pub unlock: Option<Unlock>,
+    /// When it helps, in a few words. Shown in the folder list.
+    pub when: Option<&'static str>,
+    /// Setup steps for the first-time walkthrough, one screen each. Breathing
+    /// patterns then get one practice round with the circle.
+    pub walkthrough: Vec<&'static str>,
+    /// Done with the eyes closed, so sessions start in the dim view.
+    pub eyes_closed: bool,
 }
 
 /// "Usually comes after practising `after` on `days` different days."
@@ -40,20 +47,17 @@ pub struct Unlock {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Category {
-    /// One-pointed attention; a reset between tasks.
+    StartHere,
     FocusReset,
-    /// Calming the nervous system: stress, frustration, a racing mind.
     DownRegulation,
-    /// Unhooking from thoughts: self-criticism, procrastination, stuckness.
     CognitiveDefusion,
-    /// Resting the eyes and ears from screens and noise.
     SensoryRest,
-    /// Winding down at the end of the day.
     DeepUnwind,
 }
 
 impl Category {
-    pub const ALL: [Category; 5] = [
+    pub const ALL: [Category; 6] = [
+        Category::StartHere,
         Category::FocusReset,
         Category::DownRegulation,
         Category::CognitiveDefusion,
@@ -63,26 +67,28 @@ impl Category {
 
     pub fn label(self) -> &'static str {
         match self {
-            Category::FocusReset => "Focus reset",
-            Category::DownRegulation => "Down-regulation",
-            Category::CognitiveDefusion => "Cognitive defusion",
-            Category::SensoryRest => "Sensory rest",
-            Category::DeepUnwind => "Deep unwind",
+            Category::StartHere => "Start here",
+            Category::FocusReset => "Focus",
+            Category::DownRegulation => "Calm down",
+            Category::CognitiveDefusion => "Untangle thoughts",
+            Category::SensoryRest => "Rest your senses",
+            Category::DeepUnwind => "Wind down",
         }
     }
 
     /// One line on what it's for, shown when its folder is selected.
     pub fn blurb(self) -> &'static str {
         match self {
-            Category::FocusReset => "One-pointed attention; a reset between tasks.",
-            Category::DownRegulation => {
-                "Calming the nervous system: stress, frustration, a racing mind."
+            Category::StartHere => {
+                "New to this? Learn these first. They're simple and work at a desk."
             }
+            Category::FocusReset => "For a scattered mind, or a reset between tasks.",
+            Category::DownRegulation => "When you're stressed, frustrated or wound up.",
             Category::CognitiveDefusion => {
-                "Unhooking from thoughts: self-criticism, procrastination, stuckness."
+                "When a thought has its hooks in you: self-criticism, putting things off, feeling stuck."
             }
-            Category::SensoryRest => "Resting the eyes and ears from screens and noise.",
-            Category::DeepUnwind => "Winding down at the end of the day.",
+            Category::SensoryRest => "Rest your eyes and ears from screens and noise.",
+            Category::DeepUnwind => "For the end of the day, or before sleep.",
         }
     }
 }
@@ -201,11 +207,48 @@ impl Meditation {
             prep: None,
             interval_bell: None,
             unlock: None,
+            when: None,
+            walkthrough: Vec::new(),
+            eyes_closed: false,
+        }
+    }
+
+    /// Whether there's anything to walk through: setup steps, or a
+    /// breathing pattern to try once.
+    pub fn has_walkthrough(&self) -> bool {
+        !self.walkthrough.is_empty() || matches!(self.guide, Guide::Breath(_))
+    }
+
+    /// What step `step` of the walkthrough is: the setup steps, then one
+    /// practice round for breathing patterns, then the end.
+    pub fn walkthrough_stage(&self, step: usize) -> Stage {
+        let setup = self.walkthrough.len();
+        if step < setup {
+            Stage::Setup(self.walkthrough[step])
+        } else if step == setup && matches!(self.guide, Guide::Breath(_)) {
+            Stage::Round
+        } else {
+            Stage::Done
         }
     }
 
     fn tagged(mut self, tags: &'static [Tag]) -> Self {
         self.tags = tags;
+        self
+    }
+
+    fn when(mut self, when: &'static str) -> Self {
+        self.when = Some(when);
+        self
+    }
+
+    fn walkthrough(mut self, steps: &[&'static str]) -> Self {
+        self.walkthrough = steps.to_vec();
+        self
+    }
+
+    fn eyes_closed(mut self) -> Self {
+        self.eyes_closed = true;
         self
     }
 
@@ -225,7 +268,6 @@ impl Guide {
         }
     }
 
-    /// The text cues, for guides that have them.
     pub fn cues(&self) -> Option<&[&'static str]> {
         match self {
             Guide::Prompts(cues) | Guide::Gaze(cues) => Some(cues),
@@ -337,6 +379,84 @@ pub fn breath_at(phases: &[Phase], elapsed: Duration) -> BreathState {
     }
 }
 
+/// Breath phases shorter than this are fast breathing (bellows, breath of
+/// fire): no tone and no countdown.
+pub const MIN_TONE_SECONDS: f64 = 2.0;
+
+/// How a walkthrough eases into a breathing pattern: the first breaths are
+/// long, and they speed up until the last time through is at the real pace.
+/// Holds and rests are never stretched. Fast breathing is cut to 10 breaths
+/// and rests to 8 seconds, so it stays quick.
+pub fn warm_up(phases: &[Phase]) -> Vec<Phase> {
+    let mut fast = 0;
+    let mut cycle = Vec::new();
+    for &phase in phases {
+        if phase.seconds < MIN_TONE_SECONDS {
+            fast += 1;
+            if fast > 20 {
+                continue;
+            }
+        }
+        let seconds = match phase.motion {
+            Motion::Rest => phase.seconds.min(8.0),
+            _ => phase.seconds,
+        };
+        cycle.push(Phase { seconds, ..phase });
+    }
+
+    let moves = |phase: &Phase| phase.motion.rising().is_some();
+    let per_cycle = cycle.iter().filter(|p| moves(p)).count().max(1);
+    // Breaths to get from (up to) double length down to the real pace.
+    let ramp: usize = if fast > 0 { 10 } else { 4 };
+    let times = if fast > 0 {
+        1
+    } else {
+        ramp.div_ceil(per_cycle) + 1
+    };
+
+    let mut breaths = 0;
+    let mut out = Vec::new();
+    for _ in 0..times {
+        for &phase in &cycle {
+            let mut phase = phase;
+            if moves(&phase) {
+                let slow = 1.0 - breaths as f64 / ramp as f64;
+                if slow > 0.0 {
+                    phase.seconds += (phase.seconds * slow).min(4.0);
+                }
+                breaths += 1;
+            }
+            out.push(phase);
+        }
+    }
+    out
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Stage {
+    Setup(&'static str),
+    Round,
+    Done,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Side {
+    Left,
+    Right,
+}
+
+/// The nostril a phase is about, for labels that say LEFT or RIGHT in
+/// capitals.
+pub fn side(label: &str) -> Option<Side> {
+    label
+        .split(|c: char| !c.is_alphabetic())
+        .find_map(|word| match word {
+            "LEFT" => Some(Side::Left),
+            "RIGHT" => Some(Side::Right),
+            _ => None,
+        })
+}
+
 /// Which cue to show: the session is split into equal slices, one per cue.
 pub fn prompt_index(count: usize, elapsed: Duration, total: Duration) -> usize {
     if count == 0 || total.is_zero() {
@@ -387,6 +507,9 @@ fn preset(
         prep: None,
         interval_bell: None,
         unlock: None,
+        when: None,
+        walkthrough: Vec::new(),
+        eyes_closed: false,
     }
 }
 
@@ -452,8 +575,68 @@ pub fn presets() -> Vec<Meditation> {
     use Motion::*;
 
     let mut list = vec![
+        // ----- Start here -----
         preset(
-            Category::FocusReset,
+            Category::StartHere,
+            "Nadi Shuddhi",
+            5,
+            "Alternate nostril breathing, and the first of three steps. Right \
+             hand up: the thumb closes the right nostril, the ring and little \
+             fingers the left. Switch sides at the top of each in-breath, while \
+             the lungs are full. No holds. Start with 3 to 5 minutes and build \
+             up to 10 or more. Losing track is normal; keeping track is the \
+             practice.",
+            Guide::Breath(vec![
+                phase("Breathe in LEFT", 4.0, Grow),
+                phase("Switch · breathe out RIGHT", 6.0, Shrink),
+                phase("Breathe in RIGHT", 4.0, Grow),
+                phase("Switch · breathe out LEFT", 6.0, Shrink),
+            ]),
+        )
+        .tagged(&[Tag::OfficeSafe])
+        .when("Daily. The one the others build on.")
+        .walkthrough(&[
+            "Raise your right hand.",
+            "Close your right nostril with your thumb.",
+            "Your ring and little finger will close the left.",
+            "At the top of each breath in, you switch.",
+        ])
+        .eyes_closed(),
+        preset(
+            Category::StartHere,
+            TUTORIAL_PRESET,
+            5,
+            "Slow, even breathing at about five and a half breaths a minute. No \
+             holds, just a gentle wave in and out.",
+            Guide::Breath(vec![
+                phase("Breathe in", 5.5, Grow),
+                phase("Breathe out", 5.5, Shrink),
+            ]),
+        )
+        .tagged(&[Tag::OfficeSafe, Tag::EyesOpen])
+        .when("Any time. The easiest one.")
+        .walkthrough(&[
+            "Breathe in as the circle grows.",
+            "Breathe out as it shrinks.",
+        ]),
+        preset(
+            Category::StartHere,
+            "Box Breathing",
+            4,
+            "Breathe in, hold, breathe out, hold: four counts each. A simple, \
+             steadying pattern for when you feel scattered. Follow the circle.",
+            Guide::Breath(vec![
+                phase("Breathe in", 4.0, Grow),
+                phase("Hold", 4.0, Full),
+                phase("Breathe out", 4.0, Shrink),
+                phase("Hold", 4.0, Empty),
+            ]),
+        )
+        .tagged(&[Tag::OfficeSafe, Tag::EyesOpen])
+        .when("Before a call or demo.")
+        .walkthrough(&["Breathe in, hold, breathe out, hold.", "Follow the circle."]),
+        preset(
+            Category::StartHere,
             "Following the Breath",
             5,
             "A curious practice rather than a focusing one: find out, by feel \
@@ -469,20 +652,15 @@ pub fn presets() -> Vec<Meditation> {
                 "You can also check a spot: does the breath reach the chest? The belly?",
                 "Let go of the search. Stretch, let thoughts back in, open your eyes.",
             ]),
-        ),
-        preset(
-            Category::DownRegulation,
-            "Box Breathing",
-            4,
-            "Breathe in, hold, breathe out, hold: four counts each. A simple, \
-             steadying pattern for when you feel scattered. Follow the circle.",
-            Guide::Breath(vec![
-                phase("Breathe in", 4.0, Grow),
-                phase("Hold", 4.0, Full),
-                phase("Breathe out", 4.0, Shrink),
-                phase("Hold", 4.0, Empty),
-            ]),
-        ),
+        )
+        .tagged(&[Tag::OfficeSafe])
+        .when("When your head feels crowded.")
+        .walkthrough(&[
+            "Close your eyes.",
+            "Breathe normally. Don't control it.",
+            "Find where you feel the breath, and follow it in.",
+        ])
+        .eyes_closed(),
         preset(
             Category::DownRegulation,
             "4-7-8 Breathing",
@@ -495,36 +673,13 @@ pub fn presets() -> Vec<Meditation> {
                 phase("Hold", 7.0, Full),
                 phase("Breathe out slowly through the mouth", 8.0, Shrink),
             ]),
-        ),
-        preset(
-            Category::DownRegulation,
-            TUTORIAL_PRESET,
-            5,
-            "Slow, even breathing at about five and a half breaths a minute. No \
-             holds, just a gentle wave in and out.",
-            Guide::Breath(vec![
-                phase("Breathe in", 5.5, Grow),
-                phase("Breathe out", 5.5, Shrink),
-            ]),
-        ),
-        preset(
-            Category::DownRegulation,
-            "Nadi Shuddhi",
-            5,
-            "Alternate nostril breathing, and the first of three steps. Right \
-             hand up: index and middle fingers rest between the eyebrows, the \
-             thumb closes the right nostril and the ring finger the left. Switch \
-             sides at the top of each in-breath, while the lungs are full. No \
-             holds. Start with 3 to 5 minutes and build up to 10 or more. Losing \
-             track is normal; keeping track is the practice.",
-            Guide::Breath(vec![
-                phase("Thumb closes right · breathe in LEFT", 4.0, Grow),
-                phase("Switch while full · breathe out RIGHT", 6.0, Shrink),
-                phase("Breathe in RIGHT", 4.0, Grow),
-                phase("Switch while full · breathe out LEFT", 6.0, Shrink),
-            ]),
         )
-        .tagged(&[Tag::OfficeSafe]),
+        .when("Wound up, or before sleep.")
+        .walkthrough(&[
+            "In through your nose for 4.",
+            "Hold for 7.",
+            "Out through your mouth for 8.",
+        ]),
         preset(
             Category::DeepUnwind,
             "Body Scan",
@@ -545,7 +700,14 @@ pub fn presets() -> Vec<Meditation> {
                 "The top of your head.",
                 "Now the whole body at once, breathing.",
             ]),
-        ),
+        )
+        .when("Tense without knowing it.")
+        .walkthrough(&[
+            "Sit or lie down, and close your eyes.",
+            "Move your attention from your feet to your head.",
+            "Just notice. No need to relax anything.",
+        ])
+        .eyes_closed(),
         preset(
             Category::DeepUnwind,
             "Loving-Kindness",
@@ -564,7 +726,13 @@ pub fn presets() -> Vec<Meditation> {
                 "Now all beings, everywhere.",
                 "May all beings be safe, happy, and at ease.",
             ]),
-        ),
+        )
+        .when("Frustrated with someone.")
+        .walkthrough(&[
+            "Silently wish someone well.",
+            "Yourself first, then others.",
+        ])
+        .eyes_closed(),
         preset(
             Category::DownRegulation,
             "5-4-3-2-1 Grounding",
@@ -580,8 +748,13 @@ pub fn presets() -> Vec<Meditation> {
                 "Notice 1 thing you can taste.",
                 "Take one slow breath. You're here.",
             ]),
-        ),
-        // ----- Focus & concentration -----
+        )
+        .when("Racing mind.")
+        .walkthrough(&[
+            "You'll use your senses, one at a time.",
+            "The cues take you through it.",
+        ]),
+        // ----- Focus -----
         preset(
             Category::FocusReset,
             "Trataka",
@@ -602,7 +775,13 @@ pub fn presets() -> Vec<Meditation> {
                 "Rub your palms warm, cup them over your eyes, then open your eyes.",
             ]),
         )
-        .tagged(&[Tag::OfficeSafe, Tag::EyesOpen]),
+        .tagged(&[Tag::OfficeSafe, Tag::EyesOpen])
+        .when("Before deep work.")
+        .walkthrough(&[
+            "Sit an arm's length from the screen.",
+            "Rest your eyes on the dot. Try not to blink.",
+            "Blink whenever it hurts.",
+        ]),
         preset(
             Category::FocusReset,
             "Kaya Sthairyam",
@@ -622,7 +801,14 @@ pub fn presets() -> Vec<Meditation> {
                 "Stay perfectly still until the bell. Then enjoy moving again.",
             ]),
         )
-        .tagged(&[Tag::OfficeSafe]),
+        .tagged(&[Tag::OfficeSafe])
+        .when("Restless and fidgety.")
+        .walkthrough(&[
+            "Sit up straight and close your eyes.",
+            "Make one last adjustment.",
+            "Then don't move until the bell.",
+        ])
+        .eyes_closed(),
         preset(
             Category::FocusReset,
             "Thought Control",
@@ -642,7 +828,12 @@ pub fn presets() -> Vec<Meditation> {
                 "Don't linger. Object, thought, next object.",
             ]),
         )
-        .tagged(&[Tag::OfficeSafe, Tag::EyesOpen]),
+        .tagged(&[Tag::OfficeSafe, Tag::EyesOpen])
+        .when("Mind keeps wandering off task.")
+        .walkthrough(&[
+            "First, eyes closed: notice each thought.",
+            "Then, eyes open: let objects spark thoughts.",
+        ]),
         preset(
             Category::FocusReset,
             "Urge Surfing",
@@ -663,8 +854,14 @@ pub fn presets() -> Vec<Meditation> {
                 "Notice it fading. Each wave you ride makes the next one weaker.",
             ]),
         )
-        .tagged(&[Tag::OfficeSafe, Tag::EyesOpen]),
-        // ----- Autonomic & breath regulation -----
+        .tagged(&[Tag::OfficeSafe, Tag::EyesOpen])
+        .when("Itching to switch tabs.")
+        .walkthrough(&[
+            "Name the urge you're feeling.",
+            "Watch it rise, peak and fade.",
+            "Don't fight it. Don't give in.",
+        ]),
+        // ----- Calm down -----
         preset(
             Category::DownRegulation,
             "Anuloma Viloma",
@@ -683,7 +880,14 @@ pub fn presets() -> Vec<Meditation> {
             ]),
         )
         .tagged(&[Tag::OfficeSafe])
-        .unlocks_after("Nadi Shuddhi", 14),
+        .unlocks_after("Nadi Shuddhi", 14)
+        .when("Once Nadi Shuddhi feels easy.")
+        .walkthrough(&[
+            "Rest your hands in your lap.",
+            "No fingers this time. Just your attention.",
+            "Feel the air in one nostril at a time.",
+        ])
+        .eyes_closed(),
         preset(
             Category::DownRegulation,
             "Prana Shuddhi",
@@ -698,7 +902,14 @@ pub fn presets() -> Vec<Meditation> {
             ]),
         )
         .tagged(&[Tag::OfficeSafe])
-        .unlocks_after("Anuloma Viloma", 14),
+        .unlocks_after("Anuloma Viloma", 14)
+        .when("Once Anuloma Viloma feels easy.")
+        .walkthrough(&[
+            "Rest your hands in your lap.",
+            "Breathe through both nostrils.",
+            "Feel the air rise to between your eyebrows.",
+        ])
+        .eyes_closed(),
         preset(
             Category::DownRegulation,
             "Three-Part Breath",
@@ -715,7 +926,13 @@ pub fn presets() -> Vec<Meditation> {
                 phase("Out · let it all go", 6.0, Shrink),
             ]),
         )
-        .tagged(&[Tag::OfficeSafe, Tag::EyesOpen]),
+        .tagged(&[Tag::OfficeSafe, Tag::EyesOpen])
+        .when("After hours hunched at a desk.")
+        .walkthrough(&[
+            "Breathe into your belly first.",
+            "Then your ribs, then your chest.",
+            "Then let it all go.",
+        ]),
         preset(
             Category::DownRegulation,
             "Ujjayi",
@@ -730,7 +947,14 @@ pub fn presets() -> Vec<Meditation> {
                 phase("Out · the same soft hiss", 7.0, Shrink),
             ]),
         )
-        .tagged(&[Tag::HomeOnly]),
+        .tagged(&[Tag::HomeOnly])
+        .when("To slow your breathing down.")
+        .walkthrough(&[
+            "Narrow the back of your throat a little.",
+            "Like fogging a mirror, with your mouth closed.",
+            "Breathe through your nose with a soft hiss.",
+        ])
+        .eyes_closed(),
         preset(
             Category::DownRegulation,
             "Kapalbhati",
@@ -759,7 +983,13 @@ pub fn presets() -> Vec<Meditation> {
                 round
             }),
         )
-        .tagged(&[Tag::HomeOnly]),
+        .tagged(&[Tag::HomeOnly])
+        .when("Anxious, racing mind.")
+        .walkthrough(&[
+            "Skip it if pregnant, or with high blood pressure or heart problems.",
+            "Snap your belly in to push air out your nose.",
+            "Let the breath in happen by itself.",
+        ]),
         preset(
             Category::DownRegulation,
             "Bhastrika",
@@ -783,8 +1013,14 @@ pub fn presets() -> Vec<Meditation> {
             }),
         )
         .tagged(&[Tag::HomeOnly])
-        .unlocks_after("Kapalbhati", 14),
-        // ----- Cognitive defusion & metacognition -----
+        .unlocks_after("Kapalbhati", 14)
+        .when("When you need energy.")
+        .walkthrough(&[
+            "Skip it if pregnant, or with blood pressure, heart or lung problems.",
+            "Breathe hard in and out through your nose.",
+            "Drive it with your belly, like a bellows.",
+        ]),
+        // ----- Untangle thoughts -----
         preset(
             Category::CognitiveDefusion,
             "Defusing \"I Am\"",
@@ -806,7 +1042,12 @@ pub fn presets() -> Vec<Meditation> {
                 "Come back to the breath. You're the one doing the noticing.",
             ]),
         )
-        .tagged(&[Tag::OfficeSafe, Tag::EyesOpen]),
+        .tagged(&[Tag::OfficeSafe, Tag::EyesOpen])
+        .when("Being hard on yourself.")
+        .walkthrough(&[
+            "Catch a harsh thought about yourself.",
+            "Restate it: \"My mind is telling me...\"",
+        ]),
         preset(
             Category::CognitiveDefusion,
             "Let It Be",
@@ -826,7 +1067,13 @@ pub fn presets() -> Vec<Meditation> {
                 "The reasons can come along. You can start anyway.",
             ]),
         )
-        .tagged(&[Tag::OfficeSafe, Tag::EyesOpen]),
+        .tagged(&[Tag::OfficeSafe, Tag::EyesOpen])
+        .when("Putting something off.")
+        .walkthrough(&[
+            "Think of the task you're avoiding.",
+            "Notice the excuses. Don't argue.",
+            "\"Maybe so. Let it be.\"",
+        ]),
         preset(
             Category::CognitiveDefusion,
             "Mind and Matter",
@@ -848,7 +1095,13 @@ pub fn presets() -> Vec<Meditation> {
                 "Rest. A thing, and your reaction to it. Two different things.",
             ]),
         )
-        .tagged(&[Tag::OfficeSafe, Tag::EyesOpen]),
+        .tagged(&[Tag::OfficeSafe, Tag::EyesOpen])
+        .when("A task feels dreadful.")
+        .walkthrough(&[
+            "Look at something near you.",
+            "Notice what's really there.",
+            "Then notice what your mind adds.",
+        ]),
         preset(
             Category::CognitiveDefusion,
             "Neti Neti",
@@ -868,8 +1121,14 @@ pub fn presets() -> Vec<Meditation> {
                 "Rest as that awareness: no shape, no label. Nothing to do.",
             ]),
         )
-        .tagged(&[Tag::OfficeSafe, Tag::EyesOpen]),
-        // ----- Sensory rest (pratyahara) -----
+        .tagged(&[Tag::OfficeSafe, Tag::EyesOpen])
+        .when("A bad day feels like you.")
+        .walkthrough(&[
+            "Notice your body, feelings and thoughts.",
+            "Anything you can notice: not this.",
+            "Rest as whatever is noticing.",
+        ]),
+        // ----- Rest your senses -----
         preset(
             Category::SensoryRest,
             "Rotating Sound",
@@ -890,7 +1149,14 @@ pub fn presets() -> Vec<Meditation> {
                 "Rest. Notice how quiet the mind has become.",
             ]),
         )
-        .tagged(&[Tag::OfficeSafe]),
+        .tagged(&[Tag::OfficeSafe])
+        .when("Mind won't sit still.")
+        .walkthrough(&[
+            "Close your eyes.",
+            "Jump from sound to sound, fast.",
+            "Don't listen to any of them.",
+        ])
+        .eyes_closed(),
         preset(
             Category::SensoryRest,
             "Inner Sound",
@@ -910,7 +1176,14 @@ pub fn presets() -> Vec<Meditation> {
                 "Rest in whatever remains, sound or silence.",
             ]),
         )
-        .tagged(&[Tag::OfficeSafe]),
+        .tagged(&[Tag::OfficeSafe])
+        .when("Too much noise today.")
+        .walkthrough(&[
+            "Close your eyes and pick out a sound.",
+            "Made by one thing hitting another? Set it aside.",
+            "Keep going, down to your own heartbeat.",
+        ])
+        .eyes_closed(),
         preset(
             Category::SensoryRest,
             "Shanmukhi Mudra",
@@ -932,8 +1205,16 @@ pub fn presets() -> Vec<Meditation> {
                 "Take a deep breath, and open your eyes as you breathe out.",
             ]),
         )
-        .tagged(&[Tag::HomeOnly]),
-        // ----- Deep unwind -----
+        .tagged(&[Tag::HomeOnly])
+        .when("Everything feels too loud.")
+        .walkthrough(&[
+            "Close your ears with your thumbs.",
+            "Rest your fingers lightly on your face.",
+            "Never press on your eyes.",
+            "Breathe in, and hum on the way out.",
+        ])
+        .eyes_closed(),
+        // ----- Wind down -----
         preset(
             Category::DeepUnwind,
             "Day Rewind",
@@ -956,7 +1237,13 @@ pub fn presets() -> Vec<Meditation> {
                 "Don't time the gaps. If you reach 1, you went too fast.",
             ]),
         )
-        .tagged(&[Tag::OfficeSafe]),
+        .tagged(&[Tag::OfficeSafe])
+        .when("Replaying the day in bed.")
+        .walkthrough(&[
+            "Replay your day backwards.",
+            "Notice each feeling, then let it go.",
+        ])
+        .eyes_closed(),
         preset(
             Category::DeepUnwind,
             "Yoga Nidra",
@@ -983,7 +1270,14 @@ pub fn presets() -> Vec<Meditation> {
                 "Sit up slowly, eyes closed. Rub your palms warm and cup them over your eyes.",
             ]),
         )
-        .tagged(&[Tag::HomeOnly]),
+        .tagged(&[Tag::HomeOnly])
+        .when("Completely wiped out.")
+        .walkthrough(&[
+            "Lie on your back, palms up.",
+            "Tense your body bit by bit, then let it all go.",
+            "Falling asleep is fine.",
+        ])
+        .eyes_closed(),
         preset(
             Category::FocusReset,
             "Silent Sit",
@@ -991,7 +1285,9 @@ pub fn presets() -> Vec<Meditation> {
             "No guidance, just the slow pulse of the circle and a timer. Sit, \
              breathe, and let things settle on their own.",
             Guide::Silent,
-        ),
+        )
+        .when("Just a timer.")
+        .walkthrough(&["No cues. A bell rings at the end."]),
     ];
     list.sort_by_key(|m| m.category);
     list
@@ -1143,6 +1439,88 @@ mod tests {
                 "{category:?}"
             );
         }
+    }
+
+    #[test]
+    fn every_preset_has_a_short_when_and_walkthrough() {
+        for m in presets() {
+            let when = m.when.unwrap_or_else(|| panic!("{}", m.name));
+            assert!(when.len() <= 40, "{}: {when}", m.name);
+            assert!((1..=4).contains(&m.walkthrough.len()), "{}", m.name);
+            assert!(m.walkthrough.iter().all(|s| s.len() <= 70), "{}", m.name);
+        }
+    }
+
+    #[test]
+    fn eyes_closed_practices_are_not_eyes_open() {
+        for m in presets() {
+            assert!(
+                !(m.eyes_closed && m.tags.contains(&Tag::EyesOpen)),
+                "{}",
+                m.name
+            );
+        }
+    }
+
+    #[test]
+    fn start_here_begins_with_nadi_shuddhi() {
+        let names: Vec<String> = presets()
+            .into_iter()
+            .filter(|m| m.category == Some(Category::StartHere))
+            .map(|m| m.name)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "Nadi Shuddhi",
+                TUTORIAL_PRESET,
+                "Box Breathing",
+                "Following the Breath"
+            ]
+        );
+    }
+
+    fn warm_up_of(name: &str) -> Vec<Phase> {
+        let meditation = presets().into_iter().find(|m| m.name == name).unwrap();
+        let Guide::Breath(phases) = meditation.guide else {
+            panic!("{name} isn't a breathing pattern");
+        };
+        warm_up(&phases)
+    }
+
+    #[test]
+    fn a_warm_up_starts_slow_and_ends_at_the_real_pace() {
+        let seconds = |phases: &[Phase]| -> Vec<f64> { phases.iter().map(|p| p.seconds).collect() };
+        let nadi = warm_up_of("Nadi Shuddhi");
+        // Doubled at first (but never more than 4 seconds longer), easing
+        // down, then once through at the real 4 / 6 / 4 / 6.
+        assert_eq!(seconds(&nadi), [8.0, 10.0, 6.0, 7.5, 4.0, 6.0, 4.0, 6.0]);
+
+        // Holds stay as they are.
+        let box_breathing = warm_up_of("Box Breathing");
+        assert!(
+            box_breathing
+                .iter()
+                .filter(|p| p.motion.rising().is_none())
+                .all(|p| p.seconds == 4.0)
+        );
+        assert_eq!(seconds(&box_breathing[box_breathing.len() - 4..]), [4.0; 4]);
+    }
+
+    #[test]
+    fn a_warm_up_of_fast_breathing_stays_short() {
+        let kapalbhati = warm_up_of("Kapalbhati");
+        // 30 pumps cut to 10 breaths, and the 20 second rest to 8.
+        assert_eq!(kapalbhati.len(), 20 + 3);
+        assert_eq!(kapalbhati.last().unwrap().seconds, 8.0);
+        assert!(kapalbhati[0].seconds > kapalbhati[18].seconds);
+    }
+
+    #[test]
+    fn sides_come_from_capital_left_and_right() {
+        assert_eq!(side("Breathe in LEFT"), Some(Side::Left));
+        assert_eq!(side("Switch · breathe out RIGHT"), Some(Side::Right));
+        assert_eq!(side("Close your right nostril"), None);
     }
 
     #[test]

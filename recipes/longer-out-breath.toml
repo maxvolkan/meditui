@@ -1,0 +1,19 @@
+# A breathing pattern: the [[breath]] steps repeat for the whole session.
+
+name = "Longer Out-Breath"
+minutes = 5
+description = "In for 4, out for 6. Breathing out for longer than you breathe in is one of the simplest ways to calm down."
+category = "down_regulation"
+tags = ["office_safe", "eyes_open"]
+when = "Tense, and nobody should notice."
+walkthrough = ["In through your nose for 4.", "Out slowly for 6."]
+
+[[breath]]
+label = "Breathe in through the nose"
+seconds = 4
+motion = "in"
+
+[[breath]]
+label = "Breathe out slowly"
+seconds = 6
+motion = "out"

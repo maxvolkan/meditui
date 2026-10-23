@@ -1,0 +1,21 @@
+# Text cues: the session is split into equal parts, one per cue.
+# Here that's 6 cues over 3 minutes, so each one stays up for 30 seconds.
+
+name = "Desk Reset"
+minutes = 3
+description = "A quick check for the tension that builds up at a desk: shoulders, jaw, hands, eyes. Good between tasks."
+category = "focus_reset"
+tags = ["office_safe", "eyes_open"]
+when = "Between tasks."
+walkthrough = [
+    "Sit back from the keyboard and let your hands rest.",
+    "Each cue gives you one thing to check. Notice it, then let it go.",
+]
+cues = [
+    "Let your shoulders drop. They were probably higher than you thought.",
+    "Unclench your jaw. Let your teeth part a little.",
+    "Open your hands. Let your fingers soften.",
+    "Look away from the screen, at something far away.",
+    "Notice your breath without changing it.",
+    "Pick one thing to do next, and go do it.",
+]

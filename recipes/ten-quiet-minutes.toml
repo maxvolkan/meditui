@@ -1,0 +1,6 @@
+# The smallest recipe: just a name and a length. With no cues and no
+# [[breath]] steps it's a silent sit, and with no category it goes in
+# the "Your own" folder.
+
+name = "Ten Quiet Minutes"
+minutes = 10

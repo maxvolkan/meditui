@@ -66,11 +66,14 @@ pub struct Session {
     pub last_cue: Option<usize>,
     /// How many interval bells have rung so far.
     pub interval_bells: u64,
+    /// Showing the dim, eyes-closed view. Toggled with `h`.
+    pub dim: bool,
 }
 
 impl Session {
     pub fn start(meditation: Meditation, minutes: u64) -> Self {
         Self {
+            dim: meditation.eyes_closed,
             meditation,
             clock: Countdown::start(minutes),
             last_cue: None,

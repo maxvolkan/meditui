@@ -1,0 +1,17 @@
+# A gazing practice: cues, plus `gaze = true` to show a still point instead
+# of the breathing circle. Also shows a custom checklist and an interval bell.
+
+name = "Soft Focus"
+minutes = 6
+description = "Rest your eyes on the point in the middle of the screen. It can be a little blurry; there's no need to stare."
+category = "focus_reset"
+tags = ["office_safe", "eyes_open"]
+prep = ["Sit about an arm's length from the screen", "Turn the brightness down a little"]
+interval_bell = 2
+gaze = true
+cues = [
+    "Let your eyes rest on the point. Blink whenever you need to.",
+    "Let the edges of the screen go soft. Keep the point in the middle.",
+    "When your eyes wander, bring them back. No fuss.",
+    "Close your eyes for a few breaths, then find the point again.",
+]

@@ -46,14 +46,12 @@ pub const LOTUS: [&str; 9] = [
     "  ~~~~~~~~~~'-'~~~~~~~~~~  ",
 ];
 
-pub const SUNRISE: [&str; 7] = [
-    r"            \  |  /            ",
-    r"        '.   \ | /   .'        ",
-    "     -.    .-'''''-.    .-     ",
-    "   ---    (         )    ---   ",
-    "  ~~~~~~~~~~~~~~~~~~~~~~~~~~~  ",
-    "      ~~~~~~~~~~~~~~~~~~~      ",
-    "          ~~~~~~~~~~~          ",
+// Half blocks and box lines, which terminals draw themselves, so the sun
+// keeps its shape in any font.
+pub const SUNRISE: [&str; 3] = [
+    "       ▄█████▄       ",
+    "      █████████      ",
+    "━━━━━━━━━━━━━━━━━━━━━",
 ];
 
 // Big digits, drawn on a 3x5 grid and squeezed into 3 rows with half blocks.
@@ -82,7 +80,6 @@ pub fn big_clock(text: &str) -> Vec<String> {
         })
         .collect();
 
-    // Join the glyphs row by row on the 5 row grid...
     let grid: Vec<Vec<char>> = (0..5)
         .map(|row| {
             glyphs
@@ -95,7 +92,7 @@ pub fn big_clock(text: &str) -> Vec<String> {
         })
         .collect();
 
-    // ...then pair up rows (0+1, 2+3, 4+blank) into half block characters.
+    // Pair up rows (0+1, 2+3, 4+blank) into half block characters.
     let width = grid[0].len();
     (0..3)
         .map(|pair| {
@@ -115,14 +112,26 @@ pub fn big_clock(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// The circle's radius on a full breath, leaving room around the edge for
+/// the glow.
+fn full_radius(width: u16, height: u16) -> f64 {
+    (height as f64 / 2.0 - 1.5)
+        .min(width as f64 / 4.0 - 2.0)
+        .max(1.0)
+}
+
+/// How many columns a full circle reaches out from the middle.
+pub fn circle_reach(width: u16, height: u16) -> u16 {
+    (2.0 * full_radius(width, height)).ceil() as u16
+}
+
 /// The breathing circle. At `size` 1.0 it fills `width` x `height`; at 0.0
-/// it's a small dot. It glows a little as it fills, like a full breath.
-/// Cells are about twice as tall as they are wide, so x distances are halved.
+/// it's a small dot. Cells are about twice as tall as they are wide, so x
+/// distances are halved.
 pub fn breath_circle(size: f64, width: u16, height: u16) -> Vec<Line<'static>> {
     let size = size.clamp(0.0, 1.0);
     let (w, h) = (width as i32, height as i32);
-    // Leave room around the edge for the glow.
-    let max_r = (h as f64 / 2.0 - 1.5).min(w as f64 / 4.0 - 2.0).max(1.0);
+    let max_r = full_radius(width, height);
     let min_r = (max_r * 0.18).max(1.0);
     let r = min_r + (max_r - min_r) * size;
     let (cx, cy) = ((w - 1) as f64 / 2.0, (h - 1) as f64 / 2.0);
@@ -166,8 +175,8 @@ pub fn breath_circle(size: f64, width: u16, height: u16) -> Vec<Line<'static>> {
         .collect()
 }
 
-/// A still point for gazing practice, with a faint aura that very slowly
-/// brightens and dims. The point itself never moves.
+/// A still point for gazing practice, with a faint aura that slowly
+/// brightens and dims.
 pub fn gaze_point(seconds: f64, width: u16, height: u16) -> Vec<Line<'static>> {
     let (w, h) = (width as i32, height as i32);
     let (cx, cy) = (w / 2, h / 2);

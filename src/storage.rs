@@ -18,6 +18,10 @@ pub struct Settings {
     /// Show the tour on the next launch. Turned off after the tour is
     /// finished or skipped, and back on from the settings screen.
     pub show_tutorial: bool,
+    /// Walk through a meditation the first time you start it.
+    pub walkthroughs: bool,
+    /// Meditations you've been walked through (or skipped it), by name.
+    pub seen_walkthroughs: BTreeSet<String>,
     /// Show the short prep checklist before each session.
     pub preflight: bool,
     /// Master switch for every sound.
@@ -28,9 +32,6 @@ pub struct Settings {
     pub breath_tones: bool,
     /// Noise that plays quietly under a session.
     pub background: Background,
-    /// Hide the circle and cues during sessions, leaving only a dim clock
-    /// (for eyes-closed practice). Toggled with `h`.
-    pub minimal_view: bool,
     /// What the small clock under a session shows.
     pub clock: ClockStyle,
     /// Dim the practices that usually come later, and ask before starting
@@ -46,16 +47,26 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             show_tutorial: true,
+            walkthroughs: true,
+            seen_walkthroughs: BTreeSet::new(),
             preflight: true,
             sound: true,
             volume: 70,
             breath_tones: true,
             background: Background::Off,
-            minimal_view: false,
             clock: ClockStyle::Remaining,
             follow_path: true,
             unlocked: BTreeSet::new(),
-            closed_folders: BTreeSet::new(),
+            // Only Start here is open on a first run.
+            closed_folders: [
+                "focus_reset",
+                "down_regulation",
+                "cognitive_defusion",
+                "sensory_rest",
+                "deep_unwind",
+            ]
+            .map(String::from)
+            .into(),
         }
     }
 }
@@ -130,7 +141,6 @@ pub struct Stats {
     pub seconds: u64,
     /// Completed sessions per local date, like "2026-10-22": 2.
     pub days: BTreeMap<String, u32>,
-    /// Pomodoro work sprints finished.
     pub sprints: u64,
     /// The days each meditation was sat to the end, by name. This is what
     /// unlocks the practices that come later.
@@ -143,8 +153,7 @@ pub struct CustomMeditation {
     pub minutes: u64,
 }
 
-// `#[serde(default)]` means a missing field (say, from an older version of
-// the file) gets its default instead of failing the whole load.
+// Fields missing from files saved by older versions get their defaults.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SaveData {
@@ -243,7 +252,9 @@ mod tests {
         // Added later: older files don't have these.
         assert_eq!(data.settings.clock, ClockStyle::Remaining);
         assert!(data.settings.follow_path);
-        assert!(data.settings.unlocked.is_empty() && data.settings.closed_folders.is_empty());
+        assert!(data.settings.unlocked.is_empty());
+        assert!(!data.settings.closed_folders.contains("start_here"));
+        assert!(data.settings.walkthroughs && data.settings.seen_walkthroughs.is_empty());
         assert!(data.stats.practice.is_empty());
     }
 }

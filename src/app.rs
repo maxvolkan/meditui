@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::ListState;
 
-use crate::library::{self, Category, Guide, Meditation, Tag, Unlock};
+use crate::library::{self, Category, Guide, MIN_TONE_SECONDS, Meditation, Stage, Tag, Unlock};
 use crate::pomodoro::{self, BreakMode, Event, Pomodoro};
 use crate::progress;
 use crate::session::Session;
@@ -17,20 +17,19 @@ use crate::tutorial;
 
 pub const MAX_MINUTES: u64 = 180;
 pub const MAX_NAME_LEN: usize = 40;
-/// Breath phases shorter than this get no tone and no countdown.
-pub const MIN_TONE_SECONDS: f64 = 2.0;
 
 // Rows on the settings screen, top to bottom.
 pub const SETTING_TOUR: usize = 0;
-pub const SETTING_PREFLIGHT: usize = 1;
-pub const SETTING_PATH: usize = 2;
-pub const SETTING_CLOCK: usize = 3;
-pub const SETTING_SOUND: usize = 4;
-pub const SETTING_VOLUME: usize = 5;
-pub const SETTING_TONES: usize = 6;
-pub const SETTING_BACKGROUND: usize = 7;
-pub const SETTING_REPLAY: usize = 8;
-pub const SETTINGS_COUNT: usize = 9;
+pub const SETTING_WALKTHROUGH: usize = 1;
+pub const SETTING_PREFLIGHT: usize = 2;
+pub const SETTING_PATH: usize = 3;
+pub const SETTING_CLOCK: usize = 4;
+pub const SETTING_SOUND: usize = 5;
+pub const SETTING_VOLUME: usize = 6;
+pub const SETTING_TONES: usize = 7;
+pub const SETTING_BACKGROUND: usize = 8;
+pub const SETTING_REPLAY: usize = 9;
+pub const SETTINGS_COUNT: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FormStep {
@@ -45,8 +44,6 @@ pub struct Summary {
     pub completed: bool,
 }
 
-/// Which screen is showing. Only one at a time, and each carries the
-/// little bit of state it needs.
 #[derive(Debug)]
 pub enum Screen {
     Tutorial {
@@ -58,8 +55,17 @@ pub enum Screen {
     },
     /// "This one usually comes later": start anyway, unlock it, or go back.
     Locked,
-    /// The prep checklist before a session: which boxes are ticked, and
-    /// which row the cursor is on.
+    /// The first time through a meditation: its setup steps one at a time,
+    /// then one practice round of a breathing pattern. `round_since` is set
+    /// while the round runs. A replay (`i`) goes on to choosing a length.
+    Walkthrough {
+        minutes: u64,
+        step: usize,
+        round_since: Option<Instant>,
+        last_phase: Option<usize>,
+        replay: bool,
+    },
+    /// The prep checklist before a session.
     Preflight {
         minutes: u64,
         checked: Vec<bool>,
@@ -79,9 +85,7 @@ pub enum Screen {
     Settings {
         selected: usize,
     },
-    /// Your practice so far: totals, streaks and the heatmap.
     Stats,
-    /// Choosing sprint lengths and the kind of break.
     PomodoroSetup {
         selected: usize,
     },
@@ -98,7 +102,6 @@ pub enum Folder {
 }
 
 impl Folder {
-    /// Every folder, in list order.
     pub fn all() -> impl Iterator<Item = Folder> {
         Category::ALL
             .into_iter()
@@ -128,6 +131,7 @@ impl Folder {
     /// How a closed folder is remembered in the settings.
     fn key(self) -> &'static str {
         match self {
+            Folder::Category(Category::StartHere) => "start_here",
             Folder::Category(Category::FocusReset) => "focus_reset",
             Folder::Category(Category::DownRegulation) => "down_regulation",
             Folder::Category(Category::CognitiveDefusion) => "cognitive_defusion",
@@ -135,6 +139,18 @@ impl Folder {
             Folder::Category(Category::DeepUnwind) => "deep_unwind",
             Folder::Yours => "yours",
         }
+    }
+}
+
+/// The first screen of a walkthrough. With no setup steps it goes straight
+/// into the practice round.
+fn walkthrough(meditation: &Meditation, minutes: u64, replay: bool) -> Screen {
+    Screen::Walkthrough {
+        minutes,
+        step: 0,
+        round_since: (meditation.walkthrough_stage(0) == Stage::Round).then(Instant::now),
+        last_phase: None,
+        replay,
     }
 }
 
@@ -173,7 +189,6 @@ pub struct App {
     pub sound: Option<Sound>,
     /// Meditations from recipe files, loaded once at startup.
     recipes: Vec<Meditation>,
-    /// A pomodoro in progress, if there is one.
     pub pomodoro: Option<Pomodoro>,
     /// Terminal bell and desktop notifications when a sprint or break ends.
     /// Off by default so tests stay quiet; `main` turns it on.
@@ -225,7 +240,6 @@ impl App {
         self.library.get(self.selected_index()?)
     }
 
-    /// The row under the cursor: a folder header or a meditation.
     pub fn selected_row(&self) -> Option<Row> {
         self.visible.get(self.list_state.selected()?).copied()
     }
@@ -255,12 +269,15 @@ impl App {
         !self.data.settings.closed_folders.contains(folder.key())
     }
 
-    /// How many meditations in `folder` the filter lets through.
-    pub fn folder_count(&self, folder: Folder) -> usize {
+    /// The meditations in `folder` that the filter lets through.
+    pub fn in_folder(&self, folder: Folder) -> impl Iterator<Item = &Meditation> {
         self.library
             .iter()
-            .filter(|m| Folder::of(m) == folder && self.passes_filters(m))
-            .count()
+            .filter(move |m| Folder::of(m) == folder && self.passes_filters(m))
+    }
+
+    pub fn folder_count(&self, folder: Folder) -> usize {
+        self.in_folder(folder).count()
     }
 
     /// For a practice that usually comes later and hasn't been earned yet:
@@ -470,6 +487,7 @@ impl App {
         if let Some(event) = self.pomodoro.as_mut().and_then(Pomodoro::tick) {
             self.pomodoro_alert(event);
         }
+        self.walkthrough_tick();
         let tones = self.data.settings.breath_tones;
         let Screen::Session { session, .. } = &mut self.screen else {
             return;
@@ -480,7 +498,6 @@ impl App {
         }
         let elapsed = session.elapsed();
 
-        // A chime every N minutes, if the meditation asks for one.
         let mut chime = false;
         if let Some(minutes) = session.meditation.interval_bell {
             let due = elapsed.as_secs() / (minutes.max(1) * 60);
@@ -541,6 +558,7 @@ impl App {
             Screen::Library => self.library_key(key),
             Screen::ConfirmStart { minutes } => self.confirm_start_key(key, minutes),
             Screen::Locked => self.locked_key(key),
+            Screen::Walkthrough { .. } => self.walkthrough_key(key),
             Screen::Preflight { .. } => self.preflight_key(key),
             Screen::ConfirmDelete => self.confirm_delete_key(key),
             Screen::AddForm { step } => self.form_key(key, step),
@@ -647,6 +665,16 @@ impl App {
                 self.screen = Screen::Settings { selected: 0 };
             }
             KeyCode::Char('?') => self.screen = Screen::Tutorial { page: 0 },
+            KeyCode::Char('i') | KeyCode::Char('I') => {
+                if let Some(meditation) = self.selected() {
+                    if meditation.has_walkthrough() {
+                        let screen = walkthrough(meditation, meditation.minutes, true);
+                        self.screen = screen;
+                    } else {
+                        self.status = Some("This one has no walkthrough.".to_string());
+                    }
+                }
+            }
             KeyCode::Char('t') | KeyCode::Char('T') => self.screen = Screen::Stats,
             KeyCode::Char('p') | KeyCode::Char('P') => {
                 self.screen = Screen::PomodoroSetup { selected: 0 };
@@ -696,6 +724,110 @@ impl App {
         }
     }
 
+    /// The walkthrough the first time, then the session. Pomodoro breaks
+    /// never stop to teach.
+    fn start(&mut self, meditation: Meditation, minutes: u64) {
+        let settings = &self.data.settings;
+        if settings.walkthroughs
+            && self.pomodoro.is_none()
+            && meditation.has_walkthrough()
+            && !settings.seen_walkthroughs.contains(&meditation.name)
+        {
+            self.screen = walkthrough(&meditation, minutes, false);
+        } else {
+            self.begin_session(meditation, minutes);
+        }
+    }
+
+    fn walkthrough_key(&mut self, key: KeyEvent) {
+        let Some(meditation) = self.selected().cloned() else {
+            self.screen = Screen::Library;
+            return;
+        };
+        let Screen::Walkthrough {
+            minutes,
+            step,
+            round_since,
+            last_phase,
+            replay,
+        } = &mut self.screen
+        else {
+            return;
+        };
+        let (minutes, replay) = (*minutes, *replay);
+        match key.code {
+            // Enter during the round skips the rest of it.
+            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Right | KeyCode::Char('l') => {
+                if meditation.walkthrough_stage(*step) == Stage::Done {
+                    self.finish_walkthrough(meditation, minutes, replay);
+                } else {
+                    *step += 1;
+                    *round_since =
+                        (meditation.walkthrough_stage(*step) == Stage::Round).then(Instant::now);
+                    *last_phase = None;
+                }
+            }
+            KeyCode::Char('s') => self.finish_walkthrough(meditation, minutes, replay),
+            KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Library,
+            _ => {}
+        }
+    }
+
+    /// Finished or skipped, it won't come up again by itself.
+    fn finish_walkthrough(&mut self, meditation: Meditation, minutes: u64, replay: bool) {
+        self.data
+            .settings
+            .seen_walkthroughs
+            .insert(meditation.name.clone());
+        self.persist();
+        if replay {
+            self.screen = Screen::ConfirmStart { minutes };
+        } else {
+            self.begin_session(meditation, minutes);
+        }
+    }
+
+    /// Moves the practice round along: a tone at each turn of the breath, and
+    /// on to the last step when the round is over.
+    fn walkthrough_tick(&mut self) {
+        let round = match (&self.screen, self.selected()) {
+            (Screen::Walkthrough { .. }, Some(meditation)) => match &meditation.guide {
+                Guide::Breath(phases) => library::warm_up(phases),
+                _ => return,
+            },
+            _ => return,
+        };
+        let tones = self.data.settings.breath_tones;
+        let Screen::Walkthrough {
+            step,
+            round_since,
+            last_phase,
+            ..
+        } = &mut self.screen
+        else {
+            return;
+        };
+        let Some(since) = *round_since else {
+            return;
+        };
+        let elapsed = since.elapsed();
+        if elapsed.as_secs_f64() >= round.iter().map(|p| p.seconds).sum::<f64>() {
+            *step += 1;
+            *round_since = None;
+            return;
+        }
+        let state = library::breath_at(&round, elapsed);
+        let turned = last_phase.replace(state.index) != Some(state.index);
+        let tone = state
+            .motion
+            .rising()
+            .filter(|_| turned && tones && state.phase_seconds >= MIN_TONE_SECONDS);
+        let volume = self.volume();
+        if let (Some(rising), Some(sound)) = (tone, self.audio()) {
+            sound.breath_tone(rising, volume);
+        }
+    }
+
     fn confirm_start_key(&mut self, key: KeyEvent, minutes: u64) {
         let adjust = |minutes: u64| Screen::ConfirmStart {
             minutes: minutes.clamp(1, MAX_MINUTES),
@@ -719,7 +851,7 @@ impl App {
                             selected: 0,
                         };
                     } else {
-                        self.begin_session(meditation, minutes);
+                        self.start(meditation, minutes);
                     }
                 }
             }
@@ -744,7 +876,6 @@ impl App {
         match key.code {
             KeyCode::Down | KeyCode::Char('j') => *selected = (*selected + 1).min(last),
             KeyCode::Up | KeyCode::Char('k') => *selected = selected.saturating_sub(1),
-            // Tick the box and move on to the next one.
             KeyCode::Char(' ') | KeyCode::Char('x') => {
                 if let Some(tick) = checked.get_mut(*selected) {
                     *tick = !*tick;
@@ -760,7 +891,7 @@ impl App {
             // Ready (or skipping): start, whatever's ticked.
             KeyCode::Enter | KeyCode::Char('s') => {
                 if let Some(meditation) = self.selected().cloned() {
-                    self.begin_session(meditation, minutes);
+                    self.start(meditation, minutes);
                 }
             }
             KeyCode::Esc | KeyCode::Char('q') => {
@@ -867,7 +998,6 @@ impl App {
                     minutes,
                 });
                 self.rebuild_library();
-                // Make sure the new one is on screen, and selected.
                 self.reveal(self.library.len() - 1);
                 self.close_form();
                 self.status = Some(format!("Added \"{name}\"."));
@@ -899,9 +1029,8 @@ impl App {
             return;
         };
         let mut end_now = false;
-        let mut toggle_view = false;
         match key.code {
-            KeyCode::Char('h') => toggle_view = true,
+            KeyCode::Char('h') => session.dim = !session.dim,
             KeyCode::Char(' ') | KeyCode::Char('p') => {
                 if *ending {
                     // "Keep going": un-ask, and resume if we paused to ask.
@@ -928,11 +1057,6 @@ impl App {
         }
         let paused = session.is_paused();
 
-        if toggle_view {
-            self.data.settings.minimal_view = !self.data.settings.minimal_view;
-            self.persist();
-            return;
-        }
         if end_now {
             self.end_session(false);
         } else if let Some(sound) = self.audio() {
@@ -1029,6 +1153,7 @@ impl App {
         let settings = &mut self.data.settings;
         match row {
             SETTING_TOUR => settings.show_tutorial = !settings.show_tutorial,
+            SETTING_WALKTHROUGH => settings.walkthroughs = !settings.walkthroughs,
             SETTING_PREFLIGHT => settings.preflight = !settings.preflight,
             SETTING_PATH => settings.follow_path = !settings.follow_path,
             SETTING_CLOCK => settings.clock = settings.clock.cycle(step),
@@ -1130,7 +1255,6 @@ impl App {
         self.persist();
     }
 
-    /// Starts a pomodoro with the saved settings.
     pub fn start_pomodoro(&mut self) {
         self.pomodoro = Some(Pomodoro::start(&self.data.pomodoro));
         self.screen = Screen::Pomodoro;
@@ -1292,12 +1416,103 @@ mod tests {
         App::new(data, None, None, Vec::new())
     }
 
-    /// Tour already seen, prep checklist off: straight to the point.
+    /// Tour already seen, every folder open, walkthroughs and prep
+    /// checklist off.
     fn returning_user() -> App {
         let mut data = SaveData::default();
         data.settings.show_tutorial = false;
+        data.settings.closed_folders.clear();
+        data.settings.walkthroughs = false;
         data.settings.preflight = false;
         test_app(data)
+    }
+
+    fn dim(app: &App) -> bool {
+        matches!(&app.screen, Screen::Session { session, .. } if session.dim)
+    }
+
+    #[test]
+    fn a_first_run_opens_only_start_here() {
+        let app = test_app(SaveData::default());
+        for folder in Folder::all() {
+            let start_here = folder == Folder::Category(Category::StartHere);
+            assert_eq!(app.is_open(folder), start_here || folder == Folder::Yours);
+        }
+        assert_eq!(app.selected().unwrap().name, "Nadi Shuddhi");
+    }
+
+    #[test]
+    fn the_first_time_comes_with_a_walkthrough() {
+        let mut app = returning_user();
+        app.data.settings.walkthroughs = true;
+        let name = app.selected().unwrap().name.clone();
+        let setup = app.selected().unwrap().walkthrough.len();
+
+        press(&mut app, KeyCode::Enter); // length
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(app.screen, Screen::Walkthrough { step: 0, .. }));
+        for _ in 0..setup {
+            press(&mut app, KeyCode::Enter);
+        }
+        assert!(matches!(
+            app.screen,
+            Screen::Walkthrough {
+                round_since: Some(_),
+                ..
+            }
+        ));
+
+        // The round ends by itself.
+        if let Screen::Walkthrough { round_since, .. } = &mut app.screen {
+            *round_since = Some(Instant::now() - Duration::from_secs(60));
+        }
+        app.tick();
+        assert!(matches!(
+            app.screen,
+            Screen::Walkthrough {
+                round_since: None,
+                ..
+            }
+        ));
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(app.screen, Screen::Session { .. }));
+        assert!(app.data.settings.seen_walkthroughs.contains(&name));
+
+        // Next time, straight in.
+        app.end_session(false);
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(app.screen, Screen::Session { .. }));
+    }
+
+    #[test]
+    fn i_replays_a_walkthrough_and_s_skips_it() {
+        let mut app = returning_user();
+        press(&mut app, KeyCode::Char('i'));
+        assert!(matches!(
+            app.screen,
+            Screen::Walkthrough { replay: true, .. }
+        ));
+        press(&mut app, KeyCode::Char('s'));
+        assert!(matches!(app.screen, Screen::ConfirmStart { .. }));
+
+        // Your own meditations have nothing to walk through.
+        let mut data = SaveData::default();
+        data.settings.show_tutorial = false;
+        data.custom.push(CustomMeditation {
+            name: "Mine".to_string(),
+            minutes: 5,
+        });
+        let mut app = test_app(data);
+        app.reveal(app.library.len() - 1);
+        press(&mut app, KeyCode::Char('i'));
+        assert!(matches!(app.screen, Screen::Library));
+        assert!(app.status.is_some());
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('s'));
+        assert!(matches!(app.screen, Screen::Session { .. }));
     }
 
     #[test]
@@ -1337,6 +1552,9 @@ mod tests {
     fn sound_settings_change() {
         let mut app = returning_user();
         press(&mut app, KeyCode::Char('s'));
+        press(&mut app, KeyCode::Down); // walkthroughs
+        press(&mut app, KeyCode::Enter);
+        assert!(app.data.settings.walkthroughs);
         press(&mut app, KeyCode::Down); // prep checklist
         press(&mut app, KeyCode::Enter);
         assert!(app.data.settings.preflight);
@@ -1441,15 +1659,15 @@ mod tests {
     }
 
     #[test]
-    fn h_hides_the_visuals_and_is_remembered() {
+    fn eyes_closed_practices_start_dim_and_h_switches() {
         let mut app = returning_user();
+        assert!(app.selected().unwrap().eyes_closed);
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Enter);
+        assert!(dim(&app));
         press(&mut app, KeyCode::Char('h'));
-        assert!(app.data.settings.minimal_view);
+        assert!(!dim(&app));
         assert!(matches!(app.screen, Screen::Session { ending: false, .. }));
-        press(&mut app, KeyCode::Char('h'));
-        assert!(!app.data.settings.minimal_view);
     }
 
     #[test]
@@ -1482,7 +1700,7 @@ mod tests {
         let app = returning_user();
         assert_eq!(
             app.visible[0],
-            Row::Folder(Folder::Category(Category::FocusReset))
+            Row::Folder(Folder::Category(Category::StartHere))
         );
         // Every category has a folder; "Your own" only shows up once it has something.
         assert_eq!(headers(&app), Category::ALL.map(Folder::Category));
@@ -1502,7 +1720,7 @@ mod tests {
     fn folders_open_and_close_and_stay_that_way() {
         let mut app = returning_user();
         let all = app.visible.len();
-        let first = Folder::Category(Category::FocusReset);
+        let first = Folder::Category(Category::StartHere);
         let inside = app.folder_count(first);
 
         // Left on a meditation closes its folder and lands on the header.
@@ -1510,7 +1728,7 @@ mod tests {
         assert_eq!(app.selected_row(), Some(Row::Folder(first)));
         assert!(!app.is_open(first));
         assert_eq!(app.visible.len(), all - inside);
-        assert!(app.data.settings.closed_folders.contains("focus_reset"));
+        assert!(app.data.settings.closed_folders.contains("start_here"));
 
         // Enter on a header doesn't start anything; it opens the folder.
         press(&mut app, KeyCode::Enter);
@@ -1541,7 +1759,7 @@ mod tests {
         press(&mut app, KeyCode::Tab);
         assert_eq!(
             app.selected_row(),
-            Some(Row::Folder(Folder::Category(Category::FocusReset)))
+            Some(Row::Folder(Folder::Category(Category::StartHere)))
         );
         press(&mut app, KeyCode::BackTab);
         assert_eq!(
@@ -1678,6 +1896,7 @@ mod tests {
     fn the_prep_checklist_comes_before_the_session() {
         let mut data = SaveData::default();
         data.settings.show_tutorial = false;
+        data.settings.walkthroughs = false;
         let mut app = test_app(data);
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Enter);
@@ -1712,6 +1931,7 @@ mod tests {
     fn the_prep_checklist_can_be_skipped_or_backed_out_of() {
         let mut data = SaveData::default();
         data.settings.show_tutorial = false;
+        data.settings.walkthroughs = false;
         let mut app = test_app(data);
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Enter);

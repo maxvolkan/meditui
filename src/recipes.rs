@@ -17,12 +17,22 @@ name = "Slow Box"
 minutes = 6
 description = "Box breathing at a slower pace, for winding down."
 
-# Optional. One of: focus_reset, down_regulation, cognitive_defusion,
-# sensory_rest, deep_unwind
+# Optional. One of: start_here, focus_reset, down_regulation,
+# cognitive_defusion, sensory_rest, deep_unwind
 category = "down_regulation"
 
 # Optional. Any of: office_safe, eyes_open, home_only
 tags = ["office_safe", "eyes_open"]
+
+# Optional: when it helps, in a few words. Shown when its folder is selected.
+when = "Winding down after work."
+
+# Optional: short steps shown one at a time the first time (and with i). A
+# breathing pattern then gets a slow warm-up with the circle.
+walkthrough = ["Breathe in, hold, breathe out, hold.", "Five seconds each."]
+
+# Optional: done with the eyes closed, so the session starts dim.
+eyes_closed = false
 
 # Optional: your own checklist before it starts (replaces the usual one).
 prep = ["Feet flat on the floor", "Phone face down"]
@@ -75,6 +85,11 @@ struct Recipe {
     tags: Vec<Tag>,
     #[serde(default)]
     prep: Vec<String>,
+    when: Option<String>,
+    #[serde(default)]
+    walkthrough: Vec<String>,
+    #[serde(default)]
+    eyes_closed: bool,
     interval_bell: Option<u64>,
     #[serde(default)]
     breath: Vec<Step>,
@@ -224,6 +239,13 @@ pub fn parse(text: &str) -> Result<Meditation, String> {
         prep,
         interval_bell: recipe.interval_bell,
         unlock: None,
+        when: recipe
+            .when
+            .map(|when| when.trim().to_string())
+            .filter(|when| !when.is_empty())
+            .map(leak),
+        walkthrough: recipe.walkthrough.into_iter().map(leak).collect(),
+        eyes_closed: recipe.eyes_closed,
     })
 }
 
@@ -244,6 +266,9 @@ mod tests {
         assert_eq!(m.category, Some(Category::DownRegulation));
         assert_eq!(m.tags, &[Tag::OfficeSafe, Tag::EyesOpen]);
         assert_eq!(m.interval_bell, Some(2));
+        assert!(m.when.is_some());
+        assert_eq!(m.walkthrough.len(), 2);
+        assert!(!m.eyes_closed);
         assert_eq!(
             m.guide.pattern_summary().as_deref(),
             Some("In 5 · Hold 5 · Out 5 · Hold 5")
@@ -299,6 +324,14 @@ mod tests {
         assert_eq!(names, ["First", "Second"]);
         assert_eq!(problems.len(), 1);
         assert!(problems[0].starts_with("broken.toml: "), "{problems:?}");
+    }
+
+    #[test]
+    fn the_example_recipes_in_the_repo_all_load() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("recipes");
+        let (found, problems) = load_dir(&dir);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(found.len(), 4);
     }
 
     #[test]

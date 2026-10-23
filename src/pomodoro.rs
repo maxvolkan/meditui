@@ -95,7 +95,6 @@ pub enum Phase {
     Work(Countdown),
     /// The sprint's over; waiting for you to say you're ready for a break.
     WorkDone,
-    /// A blank break.
     Break(Countdown),
     /// A meditation break, running on the normal session screen.
     MeditationBreak,
@@ -130,7 +129,6 @@ impl Pomodoro {
         }
     }
 
-    /// The running clock, if this phase has one.
     pub fn clock(&self) -> Option<&Countdown> {
         match &self.phase {
             Phase::Work(clock) | Phase::Break(clock) => Some(clock),

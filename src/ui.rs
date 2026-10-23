@@ -2,6 +2,7 @@
 //! scroll position, which ratatui keeps in `list_state`.
 
 use std::path::Path;
+use std::time::Duration;
 
 use ratatui::{
     Frame,
@@ -15,13 +16,13 @@ use ratatui::{
 };
 
 use crate::app::{
-    App, Folder, FormStep, MAX_NAME_LEN, MIN_TONE_SECONDS, POMO_BREAK, POMO_LENGTHS,
-    POMO_MEDITATION, Row as ListRow, SETTING_BACKGROUND, SETTING_CLOCK, SETTING_PATH,
-    SETTING_PREFLIGHT, SETTING_REPLAY, SETTING_SOUND, SETTING_TONES, SETTING_TOUR, SETTING_VOLUME,
-    Screen, Summary,
+    App, Folder, FormStep, MAX_NAME_LEN, POMO_BREAK, POMO_LENGTHS, POMO_MEDITATION, Row as ListRow,
+    SETTING_BACKGROUND, SETTING_CLOCK, SETTING_PATH, SETTING_PREFLIGHT, SETTING_REPLAY,
+    SETTING_SOUND, SETTING_TONES, SETTING_TOUR, SETTING_VOLUME, SETTING_WALKTHROUGH, Screen,
+    Summary,
 };
 use crate::art;
-use crate::library::{self, Guide, Tag};
+use crate::library::{self, BreathState, Guide, MIN_TONE_SECONDS, Meditation, Side, Stage, Tag};
 use crate::pomodoro::{BreakMode, Phase};
 use crate::progress::{self, Cell};
 use crate::session::{self, Session};
@@ -45,6 +46,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     match app.screen {
         Screen::Tutorial { page } => tutorial(frame, area, app, page),
         Screen::Session { .. } => session(frame, area, app),
+        Screen::Walkthrough { .. } => walkthrough(frame, area, app),
         Screen::Done(_) => done(frame, area, app),
         Screen::Settings { selected } => settings(frame, area, app, selected),
         Screen::Preflight { .. } => preflight(frame, area, app),
@@ -125,44 +127,36 @@ fn stats_line(app: &App) -> String {
 // ----- Library -----
 
 fn library(frame: &mut Frame, area: Rect, app: &mut App) {
-    let hints = if area.width >= 118 {
-        "Enter start · ←→ folders · Tab next folder · o office · a add · d delete · p pomodoro · t stats · s settings · q quit"
+    let hints = if area.width >= 138 {
+        "Enter start · i walkthrough · ←→ folders · Tab next folder · o office · a add · d delete · p pomodoro · t stats · s settings · q quit"
     } else if area.width >= 92 {
         "Enter start · ←→ folders · o office · a add · p pomodoro · t stats · s settings · q quit"
-    } else {
+    } else if area.width >= 74 {
         "Enter start · ←→ folders · p pomodoro · t stats · s settings · q quit"
+    } else {
+        "Enter start · s settings · q quit"
     };
     let outer = frame_block("meditui", hints);
     let inner = outer.inner(area).inner(ratatui::layout::Margin::new(1, 0));
     frame.render_widget(outer, area);
 
-    let show_banner = inner.height >= 26 && inner.width >= 54;
-    let head_height = if show_banner { 7 } else { 1 };
     let [head, body, foot] = Layout::vertical([
-        Constraint::Length(head_height),
+        Constraint::Length(1),
         Constraint::Fill(1),
         Constraint::Length(1),
     ])
     .spacing(1)
     .areas(inner);
 
-    // Banner + tagline
     let tagline = Line::from("a quiet place in your terminal")
         .centered()
         .fg(MUTED)
         .italic();
-    if show_banner {
-        let mut lines = art_lines(&art::banner(), Style::new().fg(ACCENT));
-        lines.push(Line::from(""));
-        lines.push(tagline);
-        frame.render_widget(Paragraph::new(lines), head);
-    } else {
-        frame.render_widget(Paragraph::new(tagline), head);
-    }
+    frame.render_widget(Paragraph::new(tagline), head);
 
     // List on the left, details on the right (when there's room).
     let (list_area, detail_area) = if body.width >= 72 {
-        let [left, right] = Layout::horizontal([Constraint::Percentage(45), Constraint::Fill(1)])
+        let [left, right] = Layout::horizontal([Constraint::Percentage(50), Constraint::Fill(1)])
             .spacing(1)
             .areas(body);
         (left, Some(right))
@@ -170,7 +164,6 @@ fn library(frame: &mut Frame, area: Rect, app: &mut App) {
         (body, None)
     };
 
-    // The title says when the office filter is on.
     let mut title = vec![Span::styled(" Library ", Style::new().fg(ACCENT))];
     if app.office_only {
         title.push(Span::styled("· office-safe ", Style::new().fg(WARN)));
@@ -183,7 +176,6 @@ fn library(frame: &mut Frame, area: Rect, app: &mut App) {
         list_block =
             list_block.title_bottom(Line::from(" o to show everything ").centered().fg(MUTED));
     } else if !app.has_custom() {
-        // The "you don't have any yet" message for your own meditations.
         list_block = list_block.title_bottom(
             Line::from(" none of your own yet · a to add ")
                 .centered()
@@ -227,7 +219,7 @@ fn library(frame: &mut Frame, area: Rect, app: &mut App) {
                 Span::styled(marker, Style::new().fg(if locked { MUTED } else { ACCENT })),
                 Span::styled(format!("{name}{pad} "), name_style),
             ];
-            // O office-safe, E eyes-open, H home-only (in yellow, as a heads-up).
+            // Up to two tag letters, with home-only in yellow.
             for slot in 0..2 {
                 spans.push(match m.tags.get(slot) {
                     Some(Tag::HomeOnly) => Span::styled("H", Style::new().fg(WARN)),
@@ -381,14 +373,22 @@ fn details(frame: &mut Frame, area: Rect, app: &App) {
             .fg(WARN),
         );
     }
+    if let Some(when) = m.when {
+        lines.push(Line::from(""));
+        lines.push(Line::from(when).fg(ACCENT).italic());
+    }
     lines.push(Line::from(""));
     lines.push(Line::from(m.description.clone()));
     lines.push(Line::from(""));
-    let begin = if locked.is_some() {
+    let mut begin = if locked.is_some() {
         "Enter to begin (it'll ask first)"
     } else {
         "Enter to begin"
-    };
+    }
+    .to_string();
+    if m.has_walkthrough() {
+        begin.push_str(" · i walkthrough");
+    }
     lines.push(Line::from(begin).fg(MUTED).italic());
 
     frame.render_widget(
@@ -408,6 +408,8 @@ fn folder_details(frame: &mut Frame, area: Rect, app: &App, folder: Folder) {
                 .bold(),
         )
         .padding(Padding::new(2, 2, 1, 0));
+    let inner = block.inner(area);
+    let width = inner.width as usize;
     let count = app.folder_count(folder);
     let plural = if count == 1 { "" } else { "s" };
     let action = if app.is_open(folder) {
@@ -415,17 +417,48 @@ fn folder_details(frame: &mut Frame, area: Rect, app: &App, folder: Folder) {
     } else {
         "Enter or → to open"
     };
-    let lines = vec![
-        Line::from(format!("{count} meditation{plural}")).fg(MUTED),
+    let mut lines = vec![
+        Line::from(truncate(
+            &format!("{count} meditation{plural} · {action}"),
+            width,
+        ))
+        .fg(MUTED),
         Line::from(""),
-        Line::from(folder.blurb()),
-        Line::from(""),
-        Line::from(action).fg(MUTED).italic(),
     ];
-    frame.render_widget(
-        Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
-        area,
+    lines.extend(
+        wrap_words(folder.blurb(), width)
+            .into_iter()
+            .map(Line::from),
     );
+    lines.push(Line::from(""));
+
+    // Which one to pick when, like a menu: two lines each if they fit, one
+    // if not, and as many names as fit after that.
+    let items: Vec<&Meditation> = app.in_folder(folder).collect();
+    let room = (inner.height as usize).saturating_sub(lines.len());
+    let when = |m: &Meditation| m.when.unwrap_or_default();
+    if items.len() * 2 <= room {
+        for m in &items {
+            lines.push(Line::from(truncate(&m.name, width)).fg(ACCENT));
+            lines.push(Line::from(truncate(&format!("  {}", when(m)), width)));
+        }
+    } else if items.len() <= room {
+        for m in &items {
+            let rest = width.saturating_sub(m.name.chars().count() + 3);
+            lines.push(Line::from(vec![
+                Span::styled(m.name.clone(), Style::new().fg(ACCENT)),
+                Span::styled(" · ", Style::new().fg(MUTED)),
+                Span::raw(truncate(when(m), rest)),
+            ]));
+        }
+    } else {
+        let shown = room.saturating_sub(1);
+        for m in items.iter().take(shown) {
+            lines.push(Line::from(truncate(&m.name, width)).fg(ACCENT));
+        }
+        lines.push(Line::from(format!("+{} more", items.len() - shown)).fg(MUTED));
+    }
+    frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 /// "This one usually comes later": start anyway, unlock for good, or back.
@@ -458,6 +491,83 @@ fn locked(frame: &mut Frame, area: Rect, app: &App) {
             .wrap(Wrap { trim: true }),
         popup,
     );
+}
+
+/// One step at a time: the setup steps, one practice round with the circle,
+/// then a last word before the session.
+fn walkthrough(frame: &mut Frame, area: Rect, app: &App) {
+    let (
+        Screen::Walkthrough {
+            step,
+            round_since,
+            replay,
+            ..
+        },
+        Some(m),
+    ) = (&app.screen, app.selected())
+    else {
+        return;
+    };
+    let stage = m.walkthrough_stage(*step);
+    let hints = match stage {
+        Stage::Setup(_) => "Enter next · s skip · Esc back",
+        Stage::Round => "Enter skip ahead · Esc back",
+        Stage::Done if *replay => "Enter choose a length · Esc back",
+        Stage::Done => "Enter begin · Esc back",
+    };
+    let outer = frame_block(&format!("First time · {}", m.name), hints);
+    let inner = outer.inner(area).inner(ratatui::layout::Margin::new(2, 0));
+    frame.render_widget(outer, area);
+
+    let [visual, text_area, counter_area] = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(3),
+        Constraint::Length(1),
+    ])
+    .spacing(1)
+    .areas(inner);
+
+    let round = match (&m.guide, round_since) {
+        (Guide::Breath(phases), Some(since)) => {
+            let breath = library::breath_at(&library::warm_up(phases), since.elapsed());
+            draw_breath(frame, visual, &breath);
+            Some(breath_cue(&breath))
+        }
+        _ => {
+            resting_visual(frame, visual, m, app.uptime());
+            None
+        }
+    };
+    let text = match stage {
+        Stage::Setup(text) => text.to_string(),
+        Stage::Round => round.unwrap_or_default(),
+        Stage::Done => walkthrough_done(m).to_string(),
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(text).fg(ACCENT).bold())
+            .centered()
+            .wrap(Wrap { trim: true }),
+        centered(text_area, 64, 3),
+    );
+
+    let counter = match stage {
+        Stage::Setup(_) => format!("Step {} of {}", step + 1, m.walkthrough.len()),
+        Stage::Round => "Slow at first, then the real pace".to_string(),
+        Stage::Done => String::new(),
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(counter).centered().fg(MUTED)),
+        counter_area,
+    );
+}
+
+fn walkthrough_done(m: &Meditation) -> &'static str {
+    match (matches!(m.guide, Guide::Breath(_)), m.eyes_closed) {
+        (true, true) => "Now close your eyes. The tones keep time.",
+        (true, false) => "That's the pace. Keep following the circle.",
+        (false, true) => "Close your eyes when you're ready.",
+        (false, false) => "Ready when you are.",
+    }
 }
 
 fn confirm_start(frame: &mut Frame, area: Rect, app: &App, minutes: u64) {
@@ -748,12 +858,12 @@ fn session(frame: &mut Frame, area: Rect, app: &App) {
     let ending = *ending;
     let paused = session.is_paused();
 
-    let minimal = app.data.settings.minimal_view;
+    let minimal = session.dim;
     let hints = match (ending, paused, minimal) {
         (true, _, _) => "Esc end session · Space keep going",
         (false, true, _) => "Space resume · Esc end",
-        (false, false, true) => "h show · Space pause · Esc end",
-        (false, false, false) => "h hide · Space pause · Esc end",
+        (false, false, true) => "h show the circle · Space pause · Esc end",
+        (false, false, false) => "h dim · Space pause · Esc end",
     };
     let outer = frame_block(&session.meditation.name, hints);
     let inner = outer.inner(area).inner(ratatui::layout::Margin::new(2, 0));
@@ -794,7 +904,7 @@ fn session(frame: &mut Frame, area: Rect, app: &App) {
     progress_line(frame, progress_area, session, paused, clock);
 }
 
-/// The time to show under a session, if any: "12:34", small and out of the way.
+/// The time to show under a session, if any, like "12:34".
 fn session_clock(session: &Session, style: ClockStyle) -> Option<String> {
     match style {
         ClockStyle::Remaining => Some(session::format_clock(session.remaining())),
@@ -835,8 +945,8 @@ fn progress_line(
     }
 }
 
-/// Eyes-closed view: nothing moves, just the dim progress line (and the
-/// pause or "end?" prompt when there is one).
+/// The dim, eyes-closed view: nothing moves, just what to do right now and
+/// the progress line, in case you peek.
 fn minimal_session(
     frame: &mut Frame,
     area: Rect,
@@ -852,9 +962,21 @@ fn minimal_session(
     } else {
         None
     };
-    // The line in the middle, with room for the prompt two rows below.
-    let [line_area, _, prompt_area] =
-        Layout::vertical([Constraint::Length(1); 3]).areas(centered(area, area.width, 3));
+    let [cue_area, _, line_area, _, prompt_area] = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(centered(area, area.width, 6));
+    let (cue, _) = session_cue(session);
+    frame.render_widget(
+        Paragraph::new(Line::from(cue).fg(MUTED))
+            .centered()
+            .wrap(Wrap { trim: true }),
+        centered(cue_area, 60, 2),
+    );
     progress_line(frame, line_area, session, paused, clock);
     if let Some(prompt) = prompt {
         frame.render_widget(
@@ -870,38 +992,22 @@ fn minimal_session(
 /// always something to breathe along with.
 fn session_visual(frame: &mut Frame, area: Rect, session: &Session) -> (String, Style) {
     let elapsed = session.elapsed();
-    let height = area.height.min(19);
-    let anchor = centered(area, area.width.min(height * 4 + 8), height);
-
-    if let Guide::Gaze(_) = session.meditation.guide {
-        frame.render_widget(
-            Paragraph::new(art::gaze_point(
-                elapsed.as_secs_f64(),
-                anchor.width,
-                anchor.height,
-            )),
-            anchor,
-        );
-    } else {
-        let phases: &[library::Phase] = match &session.meditation.guide {
-            Guide::Breath(phases) => phases,
-            _ => &library::RESTING_BREATH,
-        };
-        let breath = library::breath_at(phases, elapsed);
-        frame.render_widget(
-            Paragraph::new(art::breath_circle(breath.size, anchor.width, anchor.height)),
-            anchor,
-        );
-        if let Guide::Breath(_) = session.meditation.guide {
-            let cue = if breath.phase_seconds >= MIN_TONE_SECONDS {
-                format!("{} · {}", breath.label, breath.seconds_left.ceil() as u64)
-            } else {
-                breath.label.to_string()
-            };
-            return (cue, Style::new().fg(ACCENT).bold());
-        }
+    match &session.meditation.guide {
+        Guide::Breath(phases) => draw_breath(frame, area, &library::breath_at(phases, elapsed)),
+        _ => resting_visual(frame, area, &session.meditation, elapsed),
     }
+    session_cue(session)
+}
 
+/// What to do right now: the breath phase or the current cue.
+fn session_cue(session: &Session) -> (String, Style) {
+    let elapsed = session.elapsed();
+    if let Guide::Breath(phases) = &session.meditation.guide {
+        return (
+            breath_cue(&library::breath_at(phases, elapsed)),
+            Style::new().fg(ACCENT).bold(),
+        );
+    }
     match session.meditation.guide.cues() {
         Some(cues) => {
             let index = library::prompt_index(cues.len(), elapsed, session.total());
@@ -912,6 +1018,67 @@ fn session_visual(frame: &mut Frame, area: Rect, session: &Session) -> (String, 
             "Just sit. Breathe along with the circle if it helps.".to_string(),
             Style::new().fg(MUTED).italic(),
         ),
+    }
+}
+
+/// "Breathe in · 3", with no countdown for fast breathing.
+fn breath_cue(breath: &BreathState) -> String {
+    if breath.phase_seconds >= MIN_TONE_SECONDS {
+        format!("{} · {}", breath.label, breath.seconds_left.ceil() as u64)
+    } else {
+        breath.label.to_string()
+    }
+}
+
+/// Where the circle or gaze point sits in `area`.
+fn visual_anchor(area: Rect) -> Rect {
+    let height = area.height.min(19);
+    centered(area, area.width.min(height * 4 + 8), height)
+}
+
+/// The breathing circle, with an arrow on the side the breath goes through
+/// for alternate nostril breathing.
+fn draw_breath(frame: &mut Frame, area: Rect, breath: &BreathState) {
+    let anchor = visual_anchor(area);
+    frame.render_widget(
+        Paragraph::new(art::breath_circle(breath.size, anchor.width, anchor.height)),
+        anchor,
+    );
+    let Some(side) = library::side(breath.label) else {
+        return;
+    };
+    // Just outside the glow of a full breath.
+    let middle = anchor.x + anchor.width.saturating_sub(1) / 2;
+    let gap = art::circle_reach(anchor.width, anchor.height) + 4;
+    let (x, arrow) = match side {
+        Side::Left => (middle.saturating_sub(gap).max(anchor.x), "◀"),
+        Side::Right => ((middle + gap).min(anchor.right().saturating_sub(1)), "▶"),
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(arrow).fg(ACCENT).bold()),
+        Rect::new(x, anchor.y + anchor.height / 2, 1, 1),
+    );
+}
+
+/// The gaze point for gazing practice, otherwise the circle at a calm
+/// resting rhythm.
+fn resting_visual(frame: &mut Frame, area: Rect, meditation: &Meditation, elapsed: Duration) {
+    if let Guide::Gaze(_) = meditation.guide {
+        let anchor = visual_anchor(area);
+        frame.render_widget(
+            Paragraph::new(art::gaze_point(
+                elapsed.as_secs_f64(),
+                anchor.width,
+                anchor.height,
+            )),
+            anchor,
+        );
+    } else {
+        draw_breath(
+            frame,
+            area,
+            &library::breath_at(&library::RESTING_BREATH, elapsed),
+        );
     }
 }
 
@@ -936,7 +1103,7 @@ fn done(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(outer, area);
 
     let mut lines = Vec::new();
-    if inner.height >= 16 {
+    if inner.height >= 12 {
         lines.extend(art_lines(&art::SUNRISE, Style::new().fg(WARN)));
         lines.push(Line::from(""));
     }
@@ -1229,6 +1396,12 @@ fn settings(frame: &mut Frame, area: Rect, app: &App, selected: usize) {
             false,
         ),
         (
+            SETTING_WALKTHROUGH,
+            "Walkthrough the first time",
+            Some(on_off(settings.walkthroughs)),
+            false,
+        ),
+        (
             SETTING_PREFLIGHT,
             "Prep checklist before sessions",
             Some(on_off(settings.preflight)),
@@ -1317,6 +1490,7 @@ fn settings(frame: &mut Frame, area: Rect, app: &App, selected: usize) {
 mod tests {
     use super::*;
     use crate::storage::SaveData;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent};
     use ratatui::{Terminal, backend::TestBackend};
 
     /// Draws a 10 minute session and returns the screen, one string per row.
@@ -1324,15 +1498,20 @@ mod tests {
         let mut data = SaveData::default();
         data.settings.show_tutorial = false;
         data.settings.clock = clock;
-        data.settings.minimal_view = minimal;
         let mut app = App::new(data, None, None, Vec::new());
-        let meditation = library::presets().remove(0);
+        let mut session = Session::start(library::presets().remove(0), 10);
+        session.dim = minimal;
         app.screen = Screen::Session {
-            session: Box::new(Session::start(meditation, 10)),
+            session: Box::new(session),
             ending: false,
         };
-        let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
-        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        draw(&mut app, 80, 30)
+    }
+
+    /// The whole screen at `width` x `height`, one string per row.
+    fn draw(app: &mut App, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| render(frame, app)).unwrap();
         let buffer = terminal.backend().buffer();
         (0..buffer.area.height)
             .map(|y| {
@@ -1341,6 +1520,73 @@ mod tests {
                     .collect()
             })
             .collect()
+    }
+
+    fn fresh_app() -> App {
+        let mut data = SaveData::default();
+        data.settings.show_tutorial = false;
+        App::new(data, None, None, Vec::new())
+    }
+
+    #[test]
+    fn a_walkthrough_shows_its_steps_then_a_round_with_a_side() {
+        let mut app = fresh_app();
+        app.handle_key(KeyEvent::from(KeyCode::Char('i')));
+        let setup = app.selected().unwrap().walkthrough.len();
+        let text = draw(&mut app, 80, 30).join("\n");
+        assert!(text.contains("Raise your right hand."), "{text}");
+        assert!(text.contains(&format!("Step 1 of {setup}")), "{text}");
+
+        for _ in 0..setup {
+            app.handle_key(KeyEvent::from(KeyCode::Enter));
+        }
+        let text = draw(&mut app, 80, 30).join("\n");
+        assert!(text.contains("Breathe in LEFT · 8"), "{text}");
+        assert!(text.contains("Slow at first"), "{text}");
+        assert!(text.contains('◀'), "{text}");
+    }
+
+    #[test]
+    fn a_folder_header_lists_when_to_use_each_one() {
+        let mut app = fresh_app();
+        app.handle_key(KeyEvent::from(KeyCode::Up));
+        let text = draw(&mut app, 110, 30).join("\n");
+        assert!(text.contains("Box Breathing"), "{text}");
+        assert!(text.contains("Before a call or demo"), "{text}");
+    }
+
+    #[test]
+    fn a_big_folder_never_hides_names_without_saying_so() {
+        for height in [20, 26, 40] {
+            let mut app = fresh_app();
+            app.handle_key(KeyEvent::from(KeyCode::Tab));
+            app.handle_key(KeyEvent::from(KeyCode::Tab));
+            let Some(ListRow::Folder(folder)) = app.selected_row() else {
+                panic!("not on a folder");
+            };
+            let names: Vec<String> = app.in_folder(folder).map(|m| m.name.clone()).collect();
+            let text = draw(&mut app, 100, height).join("\n");
+            let all_there = names.iter().all(|name| text.contains(name.as_str()));
+            assert!(all_there || text.contains("more"), "{height}:\n{text}");
+        }
+    }
+
+    #[test]
+    fn the_dim_view_keeps_the_instruction() {
+        let screen = session_screen(ClockStyle::Remaining, true).join("\n");
+        assert!(screen.contains("Breathe in LEFT"), "{screen}");
+    }
+
+    #[test]
+    fn library_hints_fit_a_narrow_window() {
+        let mut data = SaveData::default();
+        data.settings.show_tutorial = false;
+        let mut app = App::new(data, None, None, Vec::new());
+        let bottom = draw(&mut app, 50, 30).pop().unwrap();
+        assert!(
+            bottom.starts_with('╰') && bottom.contains("q quit"),
+            "{bottom}"
+        );
     }
 
     #[test]
