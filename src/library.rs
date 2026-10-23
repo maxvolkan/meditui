@@ -1346,7 +1346,7 @@ mod tests {
     }
 
     #[test]
-    fn every_todo_practice_has_its_tags() {
+    fn practices_have_their_tags() {
         use Tag::*;
         let expected: [(&str, &[Tag]); 14] = [
             ("Nadi Shuddhi", &[OfficeSafe]),
