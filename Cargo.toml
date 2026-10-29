@@ -20,6 +20,7 @@ rodio = { version = "0.23.0", default-features = false, features = ["playback"] 
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 toml = "1.1.8"
 notify-rust = "4.18.2"
+keepawake = "0.6.1"
 
 [[bin]]
 name = "medi"

@@ -477,6 +477,16 @@ impl App {
         }
     }
 
+    /// True while a meditation is running on screen, so the screen should
+    /// stay on. Paused doesn't count, in case you've walked away.
+    pub fn meditating(&self) -> bool {
+        match &self.screen {
+            Screen::Session { session, .. } => !session.is_paused(),
+            Screen::Walkthrough { round_since, .. } => round_since.is_some(),
+            _ => false,
+        }
+    }
+
     // ----- Every frame -----
 
     /// Runs every time round the main loop, key or no key.
@@ -1439,6 +1449,17 @@ mod tests {
             assert_eq!(app.is_open(folder), start_here || folder == Folder::Yours);
         }
         assert_eq!(app.selected().unwrap().name, "Nadi Shuddhi");
+    }
+
+    #[test]
+    fn the_screen_stays_on_only_while_a_session_runs() {
+        let mut app = returning_user();
+        assert!(!app.meditating());
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.meditating());
+        press(&mut app, KeyCode::Char(' '));
+        assert!(!app.meditating());
     }
 
     #[test]

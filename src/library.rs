@@ -584,8 +584,7 @@ pub fn presets() -> Vec<Meditation> {
              hand up: the thumb closes the right nostril, the ring and little \
              fingers the left. Switch sides at the top of each in-breath, while \
              the lungs are full. No holds. Start with 3 to 5 minutes and build \
-             up to 10 or more. Losing track is normal; keeping track is the \
-             practice.",
+             up to 10 or more.",
             Guide::Breath(vec![
                 phase("Breathe in LEFT", 4.0, Grow),
                 phase("Switch · breathe out RIGHT", 6.0, Shrink),
@@ -596,10 +595,14 @@ pub fn presets() -> Vec<Meditation> {
         .tagged(&[Tag::OfficeSafe])
         .when("Daily. The one the others build on.")
         .walkthrough(&[
-            "Raise your right hand.",
-            "Close your right nostril with your thumb.",
-            "Your ring and little finger will close the left.",
-            "At the top of each breath in, you switch.",
+            "Raise your right hand. Your thumb closes the right nostril and your \
+             ring finger closes the left.",
+            "You switch sides at the top of each breath in. The arrow next to the \
+             circle shows which side to use.",
+            "The hand position can feel awkward at first. Keeping track of it \
+             helps pull your attention away from your thoughts.",
+            "It's normal for one nostril to be more blocked than the other, and \
+             the blocked side changes through the day.",
         ])
         .eyes_closed(),
         preset(
@@ -788,8 +791,7 @@ pub fn presets() -> Vec<Meditation> {
             5,
             "Body stillness. Sit with a straight spine, make one last adjustment, \
              then don't move at all until the bell: no fidgeting, no scratching. \
-             The only thing that moves is the breath. Sitting still turns out to \
-             be full of sensation.",
+             The only thing that moves is the breath.",
             Guide::Prompts(vec![
                 "Spine and neck straight, shoulders loose. Close your eyes.",
                 "Make one last adjustment. From now on, nothing moves.",
@@ -841,8 +843,7 @@ pub fn presets() -> Vec<Meditation> {
             "For the moment you want to switch tabs, check your phone or grab a \
              snack. Giving in once an urge peaks teaches it to come back \
              stronger. Instead, give it your full attention and ride it out: \
-             urges rise, crest and fade like waves. You don't have to win, only \
-             wait.",
+             urges rise, crest and fade like waves.",
             Guide::Prompts(vec![
                 "Name the urge: a new tab, your phone, a snack, something else.",
                 "Give it your full attention. Where do you feel it in the body?",
@@ -1028,7 +1029,7 @@ pub fn presets() -> Vec<Meditation> {
             "A defusion drill, as in Acceptance and Commitment Therapy. Catch \
              thoughts that glue a label to you (\"I am a bad programmer\") and \
              restate them as what they are: \"My mind is telling me I'm a bad \
-             programmer.\" A mind says all kinds of things. Saying them doesn't \
+             programmer.\" Your mind says all kinds of things, and that doesn't \
              make them true.",
             Guide::Prompts(vec![
                 "Notice a harsh thought about yourself. Something that starts \"I am...\".",
@@ -1081,8 +1082,7 @@ pub fn presets() -> Vec<Meditation> {
             "Nama-rupa contemplation from the Visuddhimagga: separate what's \
              really there (colour, texture, sound, words) from what your mind \
              adds to it (like, dislike, good, bad, a story). Start with dull \
-             objects and work up to ones with more charge. Seeing the two apart \
-             loosens their grip.",
+             objects and work up to ones with more charge.",
             Guide::Prompts(vec![
                 "Pick a plain object near you: a mug, the floor, a wall.",
                 "What's actually there? Colour, shape, texture, weight.",
@@ -1164,7 +1164,7 @@ pub fn presets() -> Vec<Meditation> {
             "A listening inquiry. For every sound you notice, ask: is this made \
              by one thing striking or rubbing another? If so, set it aside and \
              keep listening. Check the subtle ones too: the wind, your breath, \
-             your heartbeat. What's left when every struck sound is set aside?",
+             your heartbeat.",
             Guide::Prompts(vec![
                 "Close your eyes. Notice the sounds around you.",
                 "Take one. Is it made by something hitting or rubbing something else?",
@@ -1282,8 +1282,7 @@ pub fn presets() -> Vec<Meditation> {
             Category::FocusReset,
             "Silent Sit",
             15,
-            "No guidance, just the slow pulse of the circle and a timer. Sit, \
-             breathe, and let things settle on their own.",
+            "No guidance, just the breathing circle and a timer.",
             Guide::Silent,
         )
         .when("Just a timer.")
@@ -1447,7 +1446,8 @@ mod tests {
             let when = m.when.unwrap_or_else(|| panic!("{}", m.name));
             assert!(when.len() <= 40, "{}: {when}", m.name);
             assert!((1..=4).contains(&m.walkthrough.len()), "{}", m.name);
-            assert!(m.walkthrough.iter().all(|s| s.len() <= 70), "{}", m.name);
+            // Two lines of the 64-column walkthrough box.
+            assert!(m.walkthrough.iter().all(|s| s.len() <= 128), "{}", m.name);
         }
     }
 

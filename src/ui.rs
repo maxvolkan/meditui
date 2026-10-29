@@ -114,7 +114,7 @@ fn too_small(frame: &mut Frame, area: Rect) {
 fn stats_line(app: &App) -> String {
     let stats = &app.data.stats;
     if stats.sessions == 0 && stats.seconds == 0 {
-        return "Your first sit is waiting.".to_string();
+        return "No sessions yet.".to_string();
     }
     let plural = if stats.sessions == 1 { "" } else { "s" };
     format!(
@@ -564,9 +564,9 @@ fn walkthrough(frame: &mut Frame, area: Rect, app: &App) {
 fn walkthrough_done(m: &Meditation) -> &'static str {
     match (matches!(m.guide, Guide::Breath(_)), m.eyes_closed) {
         (true, true) => "Now close your eyes. The tones keep time.",
-        (true, false) => "That's the pace. Keep following the circle.",
+        (true, false) => "This is the real pace now. Keep following the circle.",
         (false, true) => "Close your eyes when you're ready.",
-        (false, false) => "Ready when you are.",
+        (false, false) => "Start whenever you're ready.",
     }
 }
 

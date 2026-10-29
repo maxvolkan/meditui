@@ -1,5 +1,6 @@
 mod app;
 mod art;
+mod awake;
 mod library;
 mod pomodoro;
 mod progress;
@@ -105,6 +106,7 @@ fn main() -> Result<()> {
 }
 
 fn run(mut terminal: DefaultTerminal, app: &mut App) -> Result<()> {
+    let mut stay_awake = None;
     while !app.quit {
         terminal.draw(|f| ui::render(f, app))?;
 
@@ -118,6 +120,10 @@ fn run(mut terminal: DefaultTerminal, app: &mut App) -> Result<()> {
 
         // Sessions still finish when no key is pressed.
         app.tick();
+
+        if app.meditating() != stay_awake.is_some() {
+            stay_awake = app.meditating().then(awake::StayAwake::new);
+        }
     }
     Ok(())
 }
